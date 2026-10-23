@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<title>F.R.I.D.A.Y.</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    width: 1600px; background: #fff; color: #1d1d1f;
+    font-family: "Segoe UI Variable Display", "Segoe UI", "Leelawadee UI", sans-serif;
+    -webkit-font-smoothing: antialiased; padding: 110px 0 120px;
+  }
+  .hero { text-align: center; }
+  .eyebrow { font-size: 22px; letter-spacing: .5em; color: #86868b; font-weight: 600; text-indent: .5em; }
+  h1 { font-size: 104px; font-weight: 700; letter-spacing: -.02em; margin-top: 18px; line-height: 1.02; }
+  h1 .grad { background: linear-gradient(90deg, #00b8e6 0%, #6a5cff 55%, #c04fd8 100%); -webkit-background-clip: text; color: transparent; }
+  .sub { font-size: 32px; color: #6e6e73; margin-top: 22px; font-weight: 400; }
+
+  .stage { position: relative; height: 900px; margin: 90px auto 0; width: 1500px; }
+  /* desktop: a thin-bezel monitor, wallpaper, the real FRIDAY panel on the right edge */
+  .monitor { position: absolute; left: 0; top: 30px; width: 1080px; }
+  .screen {
+    position: relative; width: 1080px; height: 640px; border-radius: 22px; overflow: hidden;
+    border: 12px solid #1d1d1f; box-shadow: 0 40px 80px -30px rgba(0,0,0,.35), 0 10px 30px -10px rgba(0,0,0,.2);
+    background:
+      radial-gradient(60% 80% at 25% 30%, #7fb6ff 0%, transparent 60%),
+      radial-gradient(50% 70% at 70% 80%, #b9a4ff 0%, transparent 60%),
+      linear-gradient(135deg, #dfe9ff 0%, #c7d6ff 50%, #e8ddff 100%);
+  }
+  .window {
+    position: absolute; left: 70px; top: 70px; width: 560px; height: 380px; border-radius: 12px;
+    background: rgba(255,255,255,.72); box-shadow: 0 20px 50px -20px rgba(30,40,90,.35);
+  }
+  .window::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 38px; border-radius: 12px 12px 0 0; background: rgba(255,255,255,.75); }
+  .window .line { position: absolute; left: 34px; height: 12px; border-radius: 6px; background: rgba(60,70,110,.12); }
+  .panel { position: absolute; right: 0; top: 0; height: calc(100% - 44px); }
+  .taskbar { position: absolute; left: 0; right: 0; bottom: 0; height: 44px; background: rgba(255,255,255,.55); backdrop-filter: blur(10px); }
+  .stand { width: 220px; height: 90px; margin: 0 auto; background: linear-gradient(#d2d2d7, #e8e8ed); clip-path: polygon(30% 0, 70% 0, 82% 100%, 18% 100%); }
+  .foot { width: 340px; height: 14px; margin: 0 auto; border-radius: 8px; background: #d2d2d7; }
+
+  /* phone: the real app screen in a slim frame, in front of the monitor */
+  .phone {
+    position: absolute; right: 0; top: 150px; width: 330px; height: 704px; border-radius: 52px; padding: 12px;
+    background: #1d1d1f; box-shadow: 0 50px 90px -30px rgba(0,0,0,.45), 0 12px 30px -12px rgba(0,0,0,.25);
+  }
+  .phone img { width: 100%; height: 100%; object-fit: cover; border-radius: 42px; display: block; }
+  .label { position: absolute; font-size: 22px; color: #86868b; font-weight: 600; }
+
+  .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 64px 70px; width: 1320px; margin: 120px auto 0; }
+  .f h3 { font-size: 30px; font-weight: 700; margin-top: 18px; letter-spacing: -.01em; }
+  .f p { font-size: 22px; line-height: 1.5; color: #6e6e73; margin-top: 10px; }
+  .icon { width: 56px; height: 56px; border-radius: 16px; display: grid; place-items: center; font-size: 30px;
+          background: linear-gradient(135deg, #e9f7ff, #efeaff); }
+  .foot-note { text-align: center; font-size: 18px; color: #a1a1a6; margin-top: 110px; }
+</style>
+</head>
+<body>
+  <section class="hero">
+    <div class="eyebrow">F.R.I.D.A.Y.</div>
+    <h1>ผู้ช่วย AI<br><span class="grad">ที่อยู่ในเครื่องคุณ</span></h1>
+    <p class="sub">พูด พิมพ์ หรือสั่งจากมือถือ — เป็นส่วนตัวทุกคำ</p>
+  </section>
+
+  <section class="stage">
+    <div class="monitor">
+      <div class="screen">
+        <div class="window"><div class="line" style="top:80px;width:300px"></div><div class="line" style="top:110px;width:420px"></div>
+          <div class="line" style="top:140px;width:360px"></div><div class="line" style="top:190px;width:260px"></div>
+          <div class="line" style="top:220px;width:400px"></div></div>
+        <img class="panel" src="panel.png" alt="">
+        <div class="taskbar"></div>
+      </div>
+      <div class="stand"></div><div class="foot"></div>
+    </div>
+    <div class="phone"><img src="phone.png" alt=""></div>
+  </section>
+
+  <section class="features">
+    <div class="f"><div class="icon">🔒</div><h3>ส่วนตัวทั้งหมด</h3><p>เสียง แชต และความจำอยู่ในเครื่องคุณ ไม่ส่งขึ้นคลาวด์</p></div>
+    <div class="f"><div class="icon">🎙️</div><h3>"Hey Friday"</h3><p>เรียกด้วยเสียง คุยต่อเนื่องได้ ฟังและพูดทั้งไทยและอังกฤษ</p></div>
+    <div class="f"><div class="icon">📱</div><h3>สั่งได้จากทุกที่</h3><p>แอปมือถือต่อตรงถึงคอมคุณ ตอบด้วยเสียง FRIDAY บนมือถือ</p></div>
+    <div class="f"><div class="icon">🛡️</div><h3>ปลอดภัยโดยออกแบบ</h3><p>คำสั่งสำคัญยืนยันด้วย Windows Hello หรือลายนิ้วมือบนมือถือ</p></div>
+    <div class="f"><div class="icon">🧠</div><h3>จำเรื่องของคุณ</h3><p>ความจำ งานที่ต้องทำ เตือนความจำ และสรุปวันให้เอง</p></div>
+    <div class="f"><div class="icon">🍃</div><h3>เบาเมื่อไม่ได้ใช้</h3><p>โหลดเมื่อเรียก คืนหน่วยความจำเองเมื่อว่าง ไม่แย่งงานอื่น</p></div>
+  </section>
+
+  <p class="foot-note">Windows 10/11 · Android 11+ · ทำงานบนการ์ดจอ NVIDIA ของคุณเอง</p>
+</body>
+</html>
