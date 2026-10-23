@@ -14,7 +14,7 @@ android {
         targetSdk = 35 // edge-to-edge is enforced from 35: handled with enableEdgeToEdge + Scaffold insets (§71)
         versionCode = 8
         versionName = "2.3"
-        ndk { abiFilters += "arm64-v8a" } // every current phone, incl. the owner's Xiaomi 13T Pro; 4 ABIs = +70 MB
+        ndk { abiFilters += "arm64-v8a" } // every current Android phone is arm64; 4 ABIs = +70 MB
     }
     buildTypes {
         release {
