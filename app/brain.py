@@ -99,6 +99,37 @@ def models(provider, refresh=False, wait=True):
     return ids
 
 
+MODEL_NAME = __import__("re").compile(r"[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*(?::[a-z0-9][a-z0-9._-]*)?")
+BIG_GB = 7.5  # §94 above this the model + Whisper + voice pass the ~8 GB VRAM budget (CLAUDE.md "don't disturb the PC")
+
+
+def pull(name, progress=lambda pct, status: None):
+    """§94 download a model into Ollama (from ollama.com, by Ollama itself). progress(percent or None, status) as it goes.
+    -> (True, size_gb) or (False, reason). Raises ValueError for a name that isn't an Ollama model name."""
+    name = str(name).strip().lower()
+    if not MODEL_NAME.fullmatch(name) or len(name) > 120:
+        raise ValueError(f"not an Ollama model name: {name!r} (e.g. qwen3:8b, gemma3:4b)")
+    last = -1
+    try:
+        with requests.post(f"{OLLAMA}/api/pull", json={"model": name, "stream": True}, stream=True, timeout=(5, 600)) as r:
+            for line in r.iter_lines():
+                if not line:
+                    continue
+                e = json.loads(line)
+                if e.get("error"):
+                    return False, e["error"]
+                pct = int(e["completed"] * 100 / e["total"]) if e.get("total") and "completed" in e else None
+                if pct is not None and pct // 10 != last // 10 or e.get("status") == "success":
+                    last = pct if pct is not None else last
+                    progress(pct, e.get("status", ""))
+    except requests.RequestException as e:
+        return False, f"Ollama ไม่ตอบ ({type(e).__name__})"
+    size = next((m.get("size", 0) for m in requests.get(f"{OLLAMA}/api/tags", timeout=5).json().get("models", [])
+                 if m["name"] in (name, name + ":latest")), 0) / 1e9
+    _models.pop("ollama", None)
+    return True, round(size, 1)
+
+
 def clean(messages):
     """What any provider may see: no private bookkeeping keys (raw cloud blocks travel only inside one turn)."""
     return [{k: v for k, v in m.items() if not k.startswith("_")} for m in messages]
@@ -262,4 +293,26 @@ if __name__ == "__main__":  # selftest: conversion + routing without any key or 
         print("(Ollama is not running: fallback path not exercised)")
     set_key("anthropic", "sk-ant-test")
     assert key("anthropic") == "sk-ant-test" and "sk-ant-test" not in open(rules.SETTINGS, encoding="utf-8").read()
+    # §94 pull: only Ollama model names; progress in 10 % steps; size read back; an error from Ollama is passed on
+    for bad in ("rm -rf /", "https://evil/x", "Qwen 3", "", "a" * 130, "../x"):
+        try:
+            pull(bad)
+            raise AssertionError(bad)
+        except ValueError:
+            pass
+
+    class _R:
+        def __init__(self, lines): self.lines = lines
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def iter_lines(self): return [json.dumps(x).encode() for x in self.lines]
+        def json(self): return {"models": [{"name": "gemma3:4b", "size": 3.3e9}]}
+    real_post, real_get = requests.post, requests.get
+    stream = [{"status": "pulling manifest"}] + [{"status": "pulling", "total": 100, "completed": c} for c in range(0, 101, 5)] + [{"status": "success"}]
+    requests.post, requests.get = (lambda *a, **k: _R(stream)), (lambda *a, **k: _R([]))
+    seen = []
+    assert pull("gemma3:4b", lambda p, s: seen.append(p)) == (True, 3.3) and seen[:3] == [0, 10, 20] and seen[-1] is None and len(seen) == 12, seen
+    requests.post = lambda *a, **k: _R([{"error": "pull model manifest: file does not exist"}])
+    assert pull("nosuch:1b") == (False, "pull model manifest: file does not exist")
+    requests.post, requests.get = real_post, real_get
     print("BRAIN SELFTEST OK")

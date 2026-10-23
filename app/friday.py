@@ -54,7 +54,7 @@ import memory, rules, docsearch, tts_th, wakeword  # onnxruntime users: also aft
 import sessions, skills, documents, hardware, security, workspace, weather, reminders, media, tasks, windows, journal, voiceid
 import remote, brain, computer
 
-__version__ = "0.42.1"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
+__version__ = "0.43.0"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
 OLLAMA = os.environ.get("FRIDAY_OLLAMA", "http://127.0.0.1:11434")
 MODEL = os.environ.get("FRIDAY_MODEL", "qwen3.5:4b")  # beat qwen3:8b 39/42 vs 33/42 with 1.7 GB less VRAM (PLAN §7)
 WHISPER = os.environ.get("FRIDAY_WHISPER", "large-v3-turbo")
@@ -156,10 +156,13 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["add", "list", "cancel"]},
                                                         "when": {"type": "string"}, "text": {"type": "string"}}, "required": ["action"]}}},
     {"type": "function", "function": {
-        "name": "media", "description": "The song/video playing on this PC (YouTube in a browser, Spotify...): "
-                                         "info = what is playing; play, pause, next, previous.",
-        "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["info", "play", "pause", "next", "previous"]}},
-                       "required": ["action"]}}},
+        "name": "media", "description": "Music/video on this PC — YouTube, YouTube Music, Spotify, Apple Music, Media Player, VLC… "
+                                         "info = what is playing; play, pause, stop, next, previous, shuffle, repeat, forward/back (10 s), "
+                                         "restart. app = which one when several are open (e.g. 'spotify'). search: query = song/artist "
+                                         "to find, app = the service (YouTube when not said) — opens its search page.",
+        "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": [
+            "info", "play", "pause", "stop", "next", "previous", "shuffle", "repeat", "forward", "back", "restart", "search"]},
+            "app": {"type": "string"}, "query": {"type": "string"}}, "required": ["action"]}}},
     {"type": "function", "function": {
         "name": "tasks", "description": "The user's to-do list (Tasks.md in the vault). add: text = the task with any day words "
                                          "('ส่งรายงานวันศุกร์'); list: open tasks for today (due today, overdue, undated); done: text = words of the task.",
@@ -850,6 +853,20 @@ def ask_api_key(provider):
 def _ask_api_key(provider):
     """§84 a small window with a hidden field; saved encrypted (DPAPI) after Windows Hello. Never shown, logged or
     written to settings.json."""
+    k = _ask_line(f"🔑 API key ของ {brain.NAMES[provider]}", "เก็บแบบเข้ารหัสในเครื่องนี้ (DPAPI) · ยืนยันด้วย Windows Hello", hide=True)
+    if not k:
+        return
+    if not confirm(f"บันทึก API key ของ {brain.NAMES[provider]}?", "", strong=True):
+        return phone_alert("ไม่ได้บันทึก API key")
+    brain.set_key(provider, k)
+    security.audit("tray", "api_key", provider, "done")  # never the key itself
+    ids = brain.models(provider, refresh=True)
+    phone_alert(f"บันทึก API key ของ {brain.NAMES[provider]} แล้ว · {len(ids)} รุ่นให้เลือกที่ tray › สมอง" if ids else
+                f"บันทึกแล้ว แต่ดึงรายชื่อรุ่นจาก {brain.NAMES[provider]} ไม่ได้ — key ถูกไหม / เน็ตต่ออยู่ไหม")
+
+
+def _ask_line(title, note, hide=False):
+    """A small topmost one-line entry window (Tk, on the calling thread — see on_tk_thread). '' when cancelled."""
     import tkinter as tk
     got = []
     root = tk.Tk()
@@ -858,9 +875,9 @@ def _ask_api_key(provider):
     bg_, fg = "#16181f", "#e8e8ee"
     root.configure(bg=bg_, highlightthickness=1, highlightbackground="#2c3040")
     font = ("Leelawadee UI", 10)
-    tk.Label(root, text=f"🔑 API key ของ {brain.NAMES[provider]}", bg=bg_, fg=fg, font=(font[0], 12, "bold")).pack(padx=16, pady=(12, 4))
-    tk.Label(root, text="เก็บแบบเข้ารหัสในเครื่องนี้ (DPAPI) · ยืนยันด้วย Windows Hello", bg=bg_, fg="#8a8fa3", font=font).pack(padx=16)
-    entry = tk.Entry(root, show="•", width=48, font=font, bg="#22252f", fg=fg, insertbackground=fg, relief="flat")
+    tk.Label(root, text=title, bg=bg_, fg=fg, font=(font[0], 12, "bold")).pack(padx=16, pady=(12, 4))
+    tk.Label(root, text=note, bg=bg_, fg="#8a8fa3", font=font).pack(padx=16)
+    entry = tk.Entry(root, show="•" if hide else "", width=48, font=font, bg="#22252f", fg=fg, insertbackground=fg, relief="flat")
     entry.pack(padx=16, pady=10, ipady=4)
     row = tk.Frame(root, bg=bg_)
     row.pack(pady=(0, 12))
@@ -878,16 +895,59 @@ def _ask_api_key(provider):
     except Exception:
         pass
     root = entry = row = done = None  # Tk freed on this thread (§72)
-    k = got[0] if got else ""
-    if not k:
+    return got[0] if got else ""
+
+
+_pulling = threading.Lock()
+
+
+def pull_model(name, source="typed"):
+    """§94 owner: "การเปลี่ยนสมองสามารถเปลี่ยนเป็น modal ได้ผ่านการโหลด modal เข้า ollama" — Ollama downloads it (asks
+    first: GBs of disk + internet), progress in the panel, then it becomes the brain. Runs in the background."""
+    name = str(name).strip().lower()
+    if not brain.MODEL_NAME.fullmatch(name):
+        return f"\"{shown(name)[:40]}\" ไม่ใช่ชื่อโมเดลของ Ollama ค่ะ (เช่น qwen3:8b, gemma3:4b — ดูที่ ollama.com/library)"
+    if name in brain.models("ollama", refresh=True) or name + ":latest" in brain.models("ollama"):
+        return switch_brain("ollama", name, source)
+    if not _pulling.acquire(blocking=False):
+        return "กำลังโหลดโมเดลอื่นอยู่ค่ะ รอให้เสร็จก่อนนะคะ"
+    if not confirm(f"ดาวน์โหลดโมเดล {name} เข้า Ollama? (จาก ollama.com · อาจหลาย GB)", ""):
+        _pulling.release()
+        return "ไม่ได้โหลดค่ะ"
+
+    def run():
+        try:
+            note = lambda t: (print(f"  ⬇ {t}"), panel.send(msg={"role": "tool", "text": f"⬇ {t}"}))
+            shown_at = [-1]
+
+            def step(pct, st):  # one line per quarter in the panel
+                if pct is not None and pct // 25 > shown_at[0]:
+                    shown_at[0] = pct // 25
+                    note(f"{name} {pct}%")
+            ok, info = brain.pull(name, step)
+            security.audit(source, "pull_model", name, "done" if ok else "error", str(info)[:200])
+            if not ok:
+                return phone_alert(f"โหลด {name} ไม่สำเร็จ — {info}")
+            big = f" · ขนาด {info} GB อาจใหญ่เกินการ์ดจอ (ช้าลงหรือแย่งงานอื่น)" if info > brain.BIG_GB else ""
+            phone_alert(f"โหลด {name} ({info} GB) เสร็จแล้ว{big}")
+            reply = switch_brain("ollama", name, source)
+            note(reply)
+        finally:
+            _pulling.release()
+    threading.Thread(target=run, daemon=True).start()
+    return f"เริ่มโหลด {name} แล้วค่ะ — ดูความคืบหน้าในแผง เสร็จแล้วจะเปลี่ยนสมองให้เอง"
+
+
+def ask_pull_model():
+    if not _key_open.acquire(blocking=False):
         return
-    if not confirm(f"บันทึก API key ของ {brain.NAMES[provider]}?", "", strong=True):
-        return phone_alert("ไม่ได้บันทึก API key")
-    brain.set_key(provider, k)
-    security.audit("tray", "api_key", provider, "done")  # never the key itself
-    ids = brain.models(provider, refresh=True)
-    phone_alert(f"บันทึก API key ของ {brain.NAMES[provider]} แล้ว · {len(ids)} รุ่นให้เลือกที่ tray › สมอง" if ids else
-                f"บันทึกแล้ว แต่ดึงรายชื่อรุ่นจาก {brain.NAMES[provider]} ไม่ได้ — key ถูกไหม / เน็ตต่ออยู่ไหม")
+    try:
+        got = []
+        on_tk_thread(lambda: got.append(_ask_line("⬇ โหลดโมเดลเข้า Ollama", "ชื่อจาก ollama.com/library เช่น qwen3:8b · gemma3:4b")))
+    finally:
+        _key_open.release()
+    if got and got[0]:
+        phone_alert(pull_model(got[0], "tray"))
 
 
 def forget_api_key(provider):
@@ -903,6 +963,9 @@ def forget_api_key(provider):
 
 BRAIN_RE = re.compile(r"\W*(?:(?:เปลี่ยน|ใช้|สลับ)(?:เป็น)?สมอง(?:เป็น|ไปใช้|ไป)?|switch (?:the )?brain to|use)\s*"
                       r"(claude|คล็อด|เคลาด์|openai|chatgpt|gpt|จีพีที|ในเครื่อง|local|qwen|ollama)(?:\s*(?:ค่ะ|คะ|ครับ|นะ|หน่อย))*\W*", re.I)
+PULL_RE = re.compile(r"\W*(?:โหลด|ดาวน์โหลด|ติดตั้ง|pull|download|install)\s*(?:โมเดล|สมอง|model)\s*([a-z0-9][\w.:/-]*)"
+                     r"(?:\s*(?:ให้หน่อย|หน่อย|ค่ะ|คะ|ครับ|นะ|เข้า\s*ollama|into ollama))*\W*", re.I)  # §94
+MODEL_RE = re.compile(r"\W*(?:เปลี่ยน|ใช้|สลับ)(?:เป็น)?สมอง(?:เป็น|ไปใช้|ไป)?\s*([a-z0-9][\w.-]*:[\w.-]+)(?:\s*(?:ค่ะ|คะ|ครับ|นะ|หน่อย))*\W*", re.I)
 BRAIN_ASK_RE = re.compile(r"\W*(?:ตอนนี้)?ใช้สมอง(?:ตัว)?(?:อะไร|ไหน)(?:อยู่)?\W*(?:ค่ะ|คะ|ครับ)?\W*|\W*which brain\W*", re.I)
 
 
@@ -910,6 +973,13 @@ def brain_command(text):
     """§84 "เปลี่ยนสมองเป็น claude" / "ใช้สมองในเครื่อง" / "ตอนนี้ใช้สมองอะไร" — code, not the model."""
     if BRAIN_ASK_RE.fullmatch(text):
         return f"ตอนนี้ใช้สมอง {brain.label()} ค่ะ"
+    if m := PULL_RE.fullmatch(text):  # §94
+        return pull_model(m[1], SOURCE)
+    if m := MODEL_RE.fullmatch(text):  # "ใช้สมอง gemma3:4b": a model already in Ollama, else say how to get it
+        name = m[1].lower()
+        if name in brain.models("ollama", refresh=True):
+            return switch_brain("ollama", name, SOURCE)
+        return f"ยังไม่มี {shown(name)} ในเครื่องค่ะ — พิมพ์ \"โหลดโมเดล {shown(name)}\" เพื่อดาวน์โหลด"
     m = BRAIN_RE.fullmatch(text)
     if not m:
         return None
@@ -1032,21 +1102,31 @@ def enroll_voice():
             f"(ความเหมือนของเสียงคุณเอง {agree:.2f} · เกณฑ์ {voiceid.threshold():.2f})")
 
 
-def media_action(action, source=None):
-    """§51 Windows media controls (no key presses). Thai result. Safe mode / changed files block it like any PC action."""
+def media_action(action, source=None, app="", query=""):
+    """§51 Windows media controls (no key presses). Thai result. Safe mode / changed files block it like any PC action.
+    §91 app = which player when several are open; search opens the service's search page (owner-approved web search)."""
     if why := blocked("media"):
         return thai_result(why)
+    if action == "search":
+        if not str(query).strip():
+            return "บอกชื่อเพลงหรือศิลปินด้วยนะคะ"
+        svc, url = media.search_url(query, app)
+        r = tool_open(url)
+        return f"เปิดหา \"{shown(str(query))[:60]}\" ใน {svc} แล้วค่ะ เลือกเพลงได้เลย" if r.startswith("Opened") else r
     try:
         if action == "info":
-            return media.describe(media.now_playing())
-        ok = media.control(action)
+            info = media.now_playing(app or None)
+            return media.describe(info) if info or not app else f"ไม่เจอ {shown(app)} ที่เปิดเพลงอยู่ค่ะ"
+        ok, name = media.control(action, app or None)
     except Exception as e:
         return f"ทำไม่ได้ค่ะ — {type(e).__name__}"
-    security.audit(source or SOURCE, "media", action, "done" if ok else "not done")
+    security.audit(source or SOURCE, "media", f"{action} {name or app}".strip(), "done" if ok else "not done")
     if ok is None:
-        return "ตอนนี้ไม่มีเพลงหรือวิดีโอที่เล่นอยู่ค่ะ"
-    done = {"play": "เล่นต่อแล้วค่ะ", "pause": "หยุดเพลงแล้วค่ะ", "next": "เปลี่ยนเป็นเพลงถัดไปแล้วค่ะ", "previous": "ย้อนเพลงแล้วค่ะ"}[action]
-    return done if ok else "แอปที่เล่นอยู่ไม่ยอมรับคำสั่งนี้ค่ะ"
+        return f"ไม่เจอ {shown(app)} ที่เปิดเพลงอยู่ค่ะ" if app else "ตอนนี้ไม่มีเพลงหรือวิดีโอที่เล่นอยู่ค่ะ"
+    done = {"play": "เล่นต่อ", "pause": "หยุดเพลง", "toggle": "สลับเล่น/หยุด", "stop": "หยุดเล่น", "next": "เปลี่ยนเป็นเพลงถัดไป",
+            "previous": "ย้อนเพลง", "shuffle": "สลับโหมดสุ่มเพลง", "repeat": "สลับโหมดเล่นซ้ำ", "forward": f"ข้ามไปข้างหน้า {media.SEEK_S} วิ",
+            "back": f"ย้อนกลับ {media.SEEK_S} วิ", "restart": "เล่นใหม่ตั้งแต่ต้น"}[action]
+    return f"{done}แล้วค่ะ ({name})" if ok else f"{name} ไม่ยอมรับคำสั่งนี้ค่ะ"
 
 
 def tool_save_skill(name, description, steps):
@@ -1124,7 +1204,7 @@ def _run_tool(name, args):
           "find_documents": lambda query="": tool_find_documents(query), "read_document": tool_read_document,
           "write_document": tool_write_document, "pdf_tool": tool_pdf, "hardware": hardware_action, "smart_home": tool_smart_home,
           "weather": lambda place="": tool_weather(place), "reminder": tool_reminder,
-          "media": lambda action="info": media_action(action), "tasks": tool_tasks,
+          "media": lambda action="info", app="", query="": media_action(action, app=app, query=query), "tasks": tool_tasks,
           "window": lambda action, app="", where="": window_action(action, app, where),
           "computer": lambda action, **a: computer.act(action, approve=computer_approve, **a),
           **memory.HANDLERS}.get(name)
@@ -1845,8 +1925,16 @@ def clear_chat(history):
     return "ล้างบทสนทนาแล้วค่ะ"
 
 
-MEDIA_COMMANDS = [(re.compile(r"\W*(?:" + p + r")" + _POLITE, re.I), a) for p, a in [
-    (r"(?:หยุด|พัก|ปิด)(?:เพลง|วิดีโอ|คลิป)(?:ก่อน|ชั่วคราว)?|pause(?: the)?(?: music| song| video)?", "pause"),
+# §91 "หยุด spotify", "เพลงต่อไปใน youtube music": an optional player at the end
+_MEDIA_APP = r"(?:\s*(?:ใน|บน|ของ|ที่|on|in)?\s*(?P<app>" + "|".join(rx for rx, _ in media.SERVICES) + r"))?"
+MEDIA_COMMANDS = [(re.compile(r"\W*(?:" + p + r")" + _MEDIA_APP + _POLITE, re.I), a) for p, a in [
+    (r"(?:หยุด|พัก|ปิด)(?:เพลง|วิดีโอ|คลิป)(?:ก่อน|ชั่วคราว)?|pause(?: the)?(?: music| song| video)?|(?:หยุด|pause)(?=\s*(?:" +
+     "|".join(rx for rx, _ in media.SERVICES) + r"))", "pause"),
+    (r"สุ่มเพลง|(?:เปิด|ปิด)?(?:โหมด)?สุ่ม(?:เพลง)?|shuffle(?: on| off)?", "shuffle"),
+    (r"(?:เปิด|ปิด)?(?:โหมด)?(?:เล่นซ้ำ|วนเพลง|วนซ้ำ)|repeat(?: on| off)?", "repeat"),
+    (r"(?:เลื่อน|ข้าม)ไป(?:ข้างหน้า)?\s*(?:10|สิบ)\s*วิ(?:นาที)?|(?:fast )?forward(?: 10 seconds)?", "forward"),
+    (r"ย้อน(?:กลับ)?(?:ไป)?\s*(?:10|สิบ)\s*วิ(?:นาที)?|rewind(?: 10 seconds)?|go back 10 seconds", "back"),
+    (r"(?:เล่น|เริ่ม)(?:เพลง|คลิป|วิดีโอ)?(?:นี้)?ใหม่(?:ตั้งแต่ต้น)?|restart(?: the)?(?: song| track| video)?", "restart"),
     (r"(?:เล่น)?(?:เพลง|วิดีโอ|คลิป)?ต่อ(?:เลย)?|เล่นเพลงต่อ|resume(?: the)?(?: music| song| video)?|play(?: the)? (?:music|song|video)", "play"),
     (r"(?:เพลง|คลิป|วิดีโอ)(?:ต่อไป|ถัดไป)|ข้ามเพลง|เปลี่ยนเพลง|next(?: song| track| video)?|skip(?: this)?(?: song| track)?", "next"),
     (r"(?:เพลง|คลิป|วิดีโอ)ก่อนหน้า|ย้อนเพลง|previous(?: song| track| video)?", "previous"),
@@ -1860,9 +1948,10 @@ TASK_DONE = re.compile(r"\W*(?:งาน)?(.+?)\s*เสร็จแล้ว|�
 
 
 def media_command(text):
+    """(action, app or "") for a fixed music command, else None."""
     for rx, action in MEDIA_COMMANDS:
-        if rx.fullmatch(text):
-            return action
+        if m := rx.fullmatch(text):
+            return action, (m.group("app") or "")
     return None
 
 
@@ -2333,6 +2422,9 @@ def selftest():
     assert BRAIN_RE.fullmatch("เปลี่ยนสมองเป็น claude")[1] == "claude" and BRAIN_RE.fullmatch("ใช้สมองในเครื่อง")[1] == "ในเครื่อง"
     assert BRAIN_RE.fullmatch("switch brain to openai") and BRAIN_ASK_RE.fullmatch("ตอนนี้ใช้สมองอะไรอยู่")
     assert not BRAIN_RE.fullmatch("สมองของคนทำงานยังไง") and not BRAIN_RE.fullmatch("ใช้ claude เขียนโค้ดดีไหม")
+    assert PULL_RE.fullmatch("โหลดโมเดล gemma3:4b")[1] == "gemma3:4b" and PULL_RE.fullmatch("pull model qwen3:8b")[1] == "qwen3:8b"
+    assert PULL_RE.fullmatch("ดาวน์โหลดโมเดล llama3.2 เข้า ollama หน่อย")[1] == "llama3.2" and not PULL_RE.fullmatch("โหลดเพลงให้หน่อย")
+    assert MODEL_RE.fullmatch("เปลี่ยนสมองเป็น gemma3:4b")[1] == "gemma3:4b" and not MODEL_RE.fullmatch("เปลี่ยนสมองเป็น claude")
     # §73 PC-typed chat for the phone: only chat lines, not the phone's own, restart after a cleared session
     import types as _ty
     _real_sess = globals()["SESS"]
@@ -2438,8 +2530,15 @@ def selftest():
     # §51 media words; "หยุด" alone is still the stop button, "หยุดเพลง" is the music
     for t, want in (("หยุดเพลง", "pause"), ("เพลงต่อไป", "next"), ("ข้ามเพลงหน่อย", "next"), ("เพลงก่อนหน้า", "previous"),
                     ("เล่นเพลงต่อ", "play"), ("เพลงนี้ชื่ออะไร", "info"), ("what's playing", "info"), ("pause the music", "pause")):
-        assert media_command(t) == want, (t, media_command(t))
+        assert media_command(t)[0] == want, (t, media_command(t))
     assert media_command("หยุด") is None and STOP_RE.fullmatch("หยุด") and media_command("เปิดเพลงให้หน่อย") is None
+    # §91 which player, more actions
+    for t, want in (("หยุด spotify", ("pause", "spotify")), ("เพลงต่อไปใน youtube music", ("next", "youtube music")),
+                    ("ข้ามเพลงใน สปอติฟาย หน่อย", ("next", "สปอติฟาย")), ("สุ่มเพลง", ("shuffle", "")), ("เล่นซ้ำ", ("repeat", "")),
+                    ("ย้อนกลับ 10 วิ", ("back", "")), ("เลื่อนไปข้างหน้า 10 วินาที", ("forward", "")), ("เล่นเพลงนี้ใหม่", ("restart", "")),
+                    ("pause youtube", ("pause", "youtube")), ("next song on spotify", ("next", "spotify"))):
+        assert media_command(t) == want, (t, media_command(t))
+    assert media_command("หยุดก่อน") is None and media_command("ข่าววันนี้") is None
     # §50 reminder commands: list / cancel / add go to code, "ปลุกจอ" stays the screen
     assert REMIND_LIST.fullmatch("มีเตือนอะไรบ้าง") and REMIND_LIST.fullmatch("list my reminders") and not REMIND_LIST.fullmatch("เตือนกินยา 2 ทุ่ม")
     assert REMIND_CANCEL.fullmatch("ยกเลิกเตือนทั้งหมด") and REMIND_CANCEL.fullmatch("ยกเลิกปลุก") and REMIND_CANCEL.fullmatch("cancel the timer")
@@ -2738,8 +2837,9 @@ def _turn(history, text):
                 panel.send(state="speaking")
                 say(reply.split(" — ")[0], barge=False)
             return
-        if action := media_command(text):  # §51 "เพลงต่อไป" etc.: code, not the LLM
-            reply = media_action(action)
+        if mc := media_command(text):  # §51 "เพลงต่อไป" etc.: code, not the LLM (§91 + which player)
+            action = mc[0]
+            reply = media_action(*mc[:1], app=mc[1])
             print(f"FRIDAY> {reply}")
             panel.send(msg={"role": "user", "text": text})
             panel.send(msg={"role": "assistant", "text": reply})
@@ -2944,6 +3044,7 @@ def start_tray(history):
                 rows.append(item(f"{'✓ ' if p == prov else ''}☁ {brain.NAMES[prov]}", pystray.Menu(*sub)))
             else:
                 rows.append(item(f"☁ {brain.NAMES[prov]} — ใส่ API key…", bg(ask_api_key, prov)))
+        rows.insert(len(brain.models("ollama", wait=False) or [brain.LOCAL]), item("⬇ โหลดโมเดลจาก Ollama…", bg(ask_pull_model)))
         return rows
 
     def session_items():  # rebuilt every time the menu opens
