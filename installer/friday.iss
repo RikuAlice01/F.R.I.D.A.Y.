@@ -1,7 +1,8 @@
 ﻿; FRIDAY installer (PLAN §75) — built by installer\build.py (passes /DAppVersion=x.y.z)
 ; Per-user, no admin: FRIDAY + its own voice program + voice models + default settings. During setup it downloads
 ; Ollama (if missing) and the LLM qwen3.5:4b, sets Ollama's "don't hog the PC" variables, and pre-downloads the
-; speech-recognition models. Nothing personal is shipped (no data\, no secrets, default settings.json).
+; speech-recognition models. Optional (§87): cua-driver 0.37.0 for the computer tool — the installer scripts read and
+; bundled in installer\cua\, no logon task, telemetry off. Nothing personal is shipped (no data\, no secrets, default settings.json).
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
@@ -52,11 +53,16 @@ english.Prefetch=Downloading the speech-recognition models (~3 GB)…
 thai.NoNvidia=ไม่พบการ์ดจอ NVIDIA — FRIDAY จะฟังเสียงด้วย CPU (ช้ากว่า) และ Ollama จะตอบช้าลง
 english.NoNvidia=No NVIDIA GPU found — FRIDAY will transcribe on the CPU (slower) and Ollama will answer more slowly.
 thai.NetFail=ดาวน์โหลดบางอย่างไม่สำเร็จ (%1) — ตรวจเน็ตแล้วติดตั้งซ้ำ หรือ FRIDAY จะโหลดเองตอนใช้ครั้งแรก
+thai.CuaTask=ติดตั้ง cua-driver ให้ FRIDAY ใช้แอปแทนคุณได้ (โหลดจาก GitHub ~20 MB · ไม่ส่งสถิติ)
+english.CuaTask=Install cua-driver so FRIDAY can use apps for you (from GitHub, ~20 MB, telemetry off)
+thai.GetCua=กำลังติดตั้ง cua-driver…
+english.GetCua=Installing cua-driver…
 english.NetFail=Some downloads failed (%1) — check the internet and run setup again; FRIDAY also downloads on first use.
 
 [Tasks]
 Name: "startup"; Description: "{cm:Startup}"
 Name: "startmenu"; Description: "{cm:StartMenu}"
+Name: "cuadriver"; Description: "{cm:CuaTask}"; Flags: unchecked
 
 [Files]
 Source: "..\dist\FRIDAY\*"; DestDir: "{app}\FRIDAY"; Flags: recursesubdirs createallsubdirs ignoreversion
@@ -68,6 +74,7 @@ Source: "..\models\vanira\*"; DestDir: "{app}\models\vanira"; Flags: ignoreversi
 Source: "..\models\speaker\*"; DestDir: "{app}\models\speaker"; Flags: ignoreversion
 Source: "..\models\piper\en_US-hfc_female-medium.onnx*"; DestDir: "{app}\models\piper"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "cua\*"; DestDir: "{tmp}\cua"; Flags: deleteafterinstall; Tasks: cuadriver
 
 [Dirs]
 Name: "{app}\data"; Flags: uninsneveruninstall
@@ -164,6 +171,20 @@ begin
   end;
 end;
 
+{ §87 cua-driver: the bundled (reviewed) install.ps1, pinned to the tested release, no logon task, telemetry off }
+procedure GetCua();
+var Ps, Exe: String; Code: Integer;
+begin
+  Status(CustomMessage('GetCua'));
+  Exe := ExpandConstant('{localappdata}\Programs\Cua\cua-driverin\cua-driver.exe');
+  Ps := '$env:CUA_DRIVER_RS_TELEMETRY_ENABLED=''false''; $env:DO_NOT_TRACK=''1''; $env:CUA_DRIVER_RS_VERSION=''0.37.0''; ' +
+        '& ''' + ExpandConstant('{tmp}\cua\install.ps1') + ''' -NoAutoStart; & ''' + Exe + ''' telemetry disable';
+  if not Exec(ExpandConstant('{sys}\WindowsPowerShell1.0\powershell.exe'),
+              '-NoProfile -ExecutionPolicy Bypass -Command "' + Ps + '"', '', SW_HIDE, ewWaitUntilTerminated, Code)
+     or not FileExists(Exe) then
+    NoteFail('cua-driver');
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
@@ -172,6 +193,7 @@ begin
     GetOllama();
     PullModel();
     Prefetch();
+    if WizardIsTaskSelected('cuadriver') then GetCua();
     if (Failed <> '') and not WizardSilent() then
       MsgBox(FmtMessage(CustomMessage('NetFail'), [Failed]), mbError, MB_OK);
   end;

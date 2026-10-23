@@ -29,6 +29,7 @@
    - ติดตั้ง **Ollama** (ตัวรันโมเดลภาษา) ถ้ายังไม่มี
    - ดาวน์โหลด**สมองของ FRIDAY** (~3.4 GB — มีหน้าต่างดำแสดงความคืบหน้า) และ**โมเดลฟังเสียง** (~3 GB)
    - ตั้งให้ FRIDAY เปิดเองตอนเข้าสู่ระบบ และสร้างทางลัด **Ctrl+Alt+J**
+   - (ถ้าติ๊ก) ติดตั้ง **cua-driver** ให้ FRIDAY ใช้แอปแทนคุณได้ — ดูหัวข้อ [ให้ FRIDAY ใช้แอปแทนคุณ](#ให้-friday-ใช้แอปแทนคุณ-cua-driver)
 3. ใช้เวลาประมาณ 10–30 นาที ขึ้นกับความเร็วเน็ต
 
 ## เริ่มใช้
@@ -96,9 +97,11 @@
 ## ให้ FRIDAY ใช้แอปแทนคุณ (cua-driver)
 
 FRIDAY อ่านปุ่มและช่องข้อความในหน้าต่างของแอป แล้วกดหรือพิมพ์ให้ **อยู่เบื้องหลัง**: เมาส์และคีย์บอร์ดของคุณไม่ขยับ และหน้าต่างไม่เด้งขึ้นมาบังงาน
-ใช้ [cua-driver](https://cua.ai/docs/cua-driver) (MIT) ซึ่งต้องติดตั้งแยก ไม่รวมอยู่ในตัวติดตั้ง FRIDAY
+ใช้ [cua-driver](https://cua.ai/docs/cua-driver) (MIT, รุ่น 0.37.0)
 
-1. ติดตั้ง (PowerShell ไม่ต้องใช้สิทธิ์ผู้ดูแลระบบ) — ปิดการส่งสถิติการใช้งานตั้งแต่ตอนติดตั้ง และไม่ให้เปิดเองตอน login:
+1. ติดตั้ง — เลือกทางใดทางหนึ่ง (ทั้งสองทางไม่ส่งสถิติการใช้งาน และไม่ตั้งให้เปิดเองตอน login):
+   - **ตอนติดตั้ง FRIDAY:** ติ๊ก "ติดตั้ง cua-driver…" (ติดตั้งซ้ำทับของเดิมได้ ถ้าลง FRIDAY ไว้แล้ว)
+   - **ติดตั้งเอง** ใน PowerShell (ไม่ต้องใช้สิทธิ์ผู้ดูแลระบบ):
    ```powershell
    $env:CUA_DRIVER_RS_TELEMETRY_ENABLED='false'
    irm https://cua.ai/driver/install.ps1 -OutFile $env:TEMP\cua-install.ps1
@@ -143,7 +146,7 @@ flowchart TD
     mem[("ความจำ<br/>Obsidian vault")] <--> llm
     rules[("กฎ + สิทธิ์")] --> llm
     llm -- "เรียกเครื่องมือ" --> gate["ด่านความปลอดภัย"]
-    gate --> tools["เปิดแอป · ไฟล์ · ฮาร์ดแวร์<br/>อากาศ · PowerShell …"]
+    gate --> tools["เปิดแอป · ไฟล์ · ฮาร์ดแวร์<br/>อากาศ · PowerShell · ใช้แอปแทนคุณ (cua-driver) …"]
     tools --> llm
     llm --> reply["คำตอบ"]
     act --> reply
@@ -284,7 +287,8 @@ sequenceDiagram
 
 ## ถอนการติดตั้ง
 
-Settings → Apps → **F.R.I.D.A.Y.** → Uninstall · Ollama ถอนแยกได้ที่เดียวกัน
+Settings → Apps → **F.R.I.D.A.Y.** → Uninstall · Ollama ถอนแยกได้ที่เดียวกัน ·
+cua-driver: ลบโฟลเดอร์ `%LOCALAPPDATA%\Programs\Cua` และ `%USERPROFILE%\.cua-driver`
 
 ---
 
