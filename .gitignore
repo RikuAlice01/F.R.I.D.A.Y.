@@ -44,5 +44,5 @@ installer/stage/
 /config/settings.json
 /data/
 
-# §89 launch video: intermediate frames/scripts
-brag-output/work/
+# §89/§96 launch video: kept on this PC only (not in git)
+brag-output/
