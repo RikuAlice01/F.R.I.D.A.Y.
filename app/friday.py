@@ -52,9 +52,9 @@ import numpy as np, psutil, requests, sounddevice as sd
 from faster_whisper import WhisperModel  # must load (ctranslate2 DLLs) before winrt, or model init access-violates
 import memory, rules, docsearch, tts_th, wakeword  # onnxruntime users: also after faster_whisper
 import sessions, skills, documents, hardware, security, workspace, weather, reminders, media, tasks, windows, journal, voiceid
-import remote, brain
+import remote, brain, computer
 
-__version__ = "0.41.1"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
+__version__ = "0.42.0"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
 OLLAMA = os.environ.get("FRIDAY_OLLAMA", "http://127.0.0.1:11434")
 MODEL = os.environ.get("FRIDAY_MODEL", "qwen3.5:4b")  # beat qwen3:8b 39/42 vs 33/42 with 1.7 GB less VRAM (PLAN §7)
 WHISPER = os.environ.get("FRIDAY_WHISPER", "large-v3-turbo")
@@ -170,6 +170,15 @@ TOOLS = [
                                           "app = an app or part of a window title, e.g. 'vscode', 'youtube', 'brave'.",
         "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["focus", "maximize", "minimize", "move", "list"]},
                                                         "app": {"type": "string"}, "where": {"type": "string"}}, "required": ["action"]}}},
+    {"type": "function", "function": {
+        "name": "computer", "description": "Use an app on this PC for the user, in the background (their mouse and keyboard are "
+                                            "not moved). read app=<name>: the window's controls, numbered [N]. Then click element=N · "
+                                            "type text=... (element=N for a text box; several lines = ONE type with new lines inside) · key keys='ctrl+s' or 'return' · menu path='File > Save'. "
+                                            "launch app=<name> opens an app first. done = finished. The owner approves each app once. "
+                                            "Read again after acting to check the result.",
+        "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["read", "click", "type", "key", "menu", "launch", "done"]},
+                                                        "app": {"type": "string"}, "element": {"type": "integer"}, "text": {"type": "string"},
+                                                        "keys": {"type": "string"}, "path": {"type": "string"}}, "required": ["action"]}}},
     {"type": "function", "function": {
         "name": "save_skill", "description": "Save a NEW skill the user described: name (lowercase-english-with-dashes), description "
                                              "(when to use it, Thai or English), steps (numbered steps naming the tools to call). The user must approve.",
@@ -1055,7 +1064,7 @@ def tool_save_skill(name, description, steps):
 
 # tools that act on the PC or read its files: blocked in safe mode / after tampering, gated after untrusted text
 MACHINE_TOOLS = {"open", "run_powershell", "run_skill_script", "add_rule", "find_images", "find_documents", "read_document",
-                 "write_document", "pdf_tool", "save_skill", "hardware", "smart_home", "media", "window"}
+                 "write_document", "pdf_tool", "save_skill", "hardware", "smart_home", "media", "window", "computer"}
 READ_TOOLS = {"find_images", "find_documents", "read_document"}  # reading more is not acting
 SOURCE = "typed"  # where the current turn came from, for the audit log: voice | typed | panel
 CHECK_FILES = False  # tamper detection runs in the real app (main), not in self-tests or imports
@@ -1085,7 +1094,8 @@ def run_tool(name, args):
         security.audit(SOURCE, name, args, "blocked", why)
         return why
     _call.approved = False
-    if UNTRUSTED.is_set() and name in (MACHINE_TOOLS - READ_TOOLS) | {"remember", "forget", "weather", "reminder", "tasks"}:
+    if UNTRUSTED.is_set() and name in (MACHINE_TOOLS - READ_TOOLS - {"computer"}) | {"remember", "forget", "weather", "reminder", "tasks"}:
+        # (computer asks Windows Hello for every new app itself — owner §86: "Hello ครั้งเดียวต่องาน")
         # this turn read a document / search result: its text may be steering the model (prompt injection)
         if not confirm("FRIDAY อ่านเอกสาร/ผลค้นในรอบนี้แล้วจะทำสิ่งนี้ — อาจเป็นคำสั่งที่แฝงมาในเอกสาร อนุญาตไหม?",
                        shown(f"{name} {json.dumps(args, ensure_ascii=False)}")[:600]):
@@ -1100,7 +1110,7 @@ def run_tool(name, args):
                 else "error" if result.startswith("Tool error") else "done")
     if name in MACHINE_TOOLS and name != "hardware":  # hardware_action audits itself
         security.audit(SOURCE, name, args, decision, result)
-    if name in ("read_document", "search_docs", "window", "media", "weather"):  # titles of pages/songs are written by others
+    if name in ("read_document", "search_docs", "window", "media", "weather", "computer"):  # titles of pages/songs are written by others
         UNTRUSTED.set()
     return result
 
@@ -1114,6 +1124,7 @@ def _run_tool(name, args):
           "weather": lambda place="": tool_weather(place), "reminder": tool_reminder,
           "media": lambda action="info": media_action(action), "tasks": tool_tasks,
           "window": lambda action, app="", where="": window_action(action, app, where),
+          "computer": lambda action, **a: computer.act(action, approve=computer_approve, **a),
           **memory.HANDLERS}.get(name)
     if not fn:
         return f"Unknown tool {name}"
@@ -1234,9 +1245,16 @@ def read_aloud(target):
     return f"📖 อ่าน{label}ให้ฟังค่ะ{note} — กด ■ หรือพูด \"Hey Friday\" เพื่อหยุด", chunks(text)
 
 
+def computer_approve(what):
+    """§86 owner: "Hello ครั้งเดียวต่องาน" — one Windows Hello per app; FRIDAY then clicks/types in it until done/idle/stop."""
+    cloud = f" · ข้อความบนหน้าต่างจะส่งให้ {brain.label()}" if brain.is_cloud() else ""  # §84 screen text leaves the PC: said here
+    return confirm(f"{shown(what)[:80]} — FRIDAY จะกด/พิมพ์ในแอปนี้เองจนจบคำสั่งนี้{cloud}", strong=True)
+
+
 def stop_ai(source="panel"):
     """Stop button / tray / "/stop": silence now, abandon the answer in progress, end the voice conversation."""
     STOP.set()
+    threading.Thread(target=computer.DRIVER.close, daemon=True).start()  # §86 let go of any app (approvals end too)
     ALARM_STOP.set()  # §50 a ringing alarm/timer too
     PANEL_CLOSED.set()  # the voice loop stops listening and goes back to waiting for the wake word
     winsound.PlaySound(None, 0)  # cuts whatever FRIDAY is saying, from any thread
@@ -1312,6 +1330,7 @@ def thai_clock(t):
 
 def chat(history, extra=""):
     UNTRUSTED.clear()
+    computer.on_close()  # §86 review: an app approval lasts one turn — a later turn's document can't steer an approved app
     user = next((m["content"] for m in reversed(history) if m["role"] == "user"), "")
     context = "\n".join(f"{m['role']}: {m['content'][:200]}" for m in history[-5:-1] if m["role"] in ("user", "assistant") and m.get("content"))
     system = SYSTEM.format(now=datetime.datetime.now().strftime("%A %d %B %Y %H:%M"), memory=memory.prompt(), rules=rules.prompt(),
