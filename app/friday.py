@@ -1,4 +1,4 @@
-"""FRIDAY - local JARVIS-style assistant: Ollama (LLM) + faster-whisper (ears) + Windows OneCore TTS (voice).
+﻿"""FRIDAY - local JARVIS-style assistant: Ollama (LLM) + faster-whisper (ears) + Windows OneCore TTS (voice).
 
 Run:  friday.cmd            (type a message, or press Enter on an empty line to talk)
       friday.cmd --selftest (no mic needed: TTS -> Whisper -> LLM round trip)
@@ -54,7 +54,7 @@ import memory, rules, docsearch, tts_th, wakeword  # onnxruntime users: also aft
 import sessions, skills, documents, hardware, security, workspace, weather, reminders, media, tasks, windows, journal, voiceid
 import remote, brain, computer
 
-__version__ = "0.42.0"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
+__version__ = "0.42.1"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
 OLLAMA = os.environ.get("FRIDAY_OLLAMA", "http://127.0.0.1:11434")
 MODEL = os.environ.get("FRIDAY_MODEL", "qwen3.5:4b")  # beat qwen3:8b 39/42 vs 33/42 with 1.7 GB less VRAM (PLAN §7)
 WHISPER = os.environ.get("FRIDAY_WHISPER", "large-v3-turbo")
@@ -174,7 +174,9 @@ TOOLS = [
         "name": "computer", "description": "Use an app on this PC for the user, in the background (their mouse and keyboard are "
                                             "not moved). read app=<name>: the window's controls, numbered [N]. Then click element=N · "
                                             "type text=... (element=N for a text box; several lines = ONE type with new lines inside) · key keys='ctrl+s' or 'return' · menu path='File > Save'. "
-                                            "launch app=<name> opens an app first. done = finished. The owner approves each app once. "
+                                            "launch app=<name> opens a NEW empty window of the app (\"open notepad and write…\": "
+                                            "launch, then type); read app=<name> uses a window already open. done = finished. "
+                                            "The owner approves each app once. "
                                             "Read again after acting to check the result.",
         "parameters": {"type": "object", "properties": {"action": {"type": "string", "enum": ["read", "click", "type", "key", "menu", "launch", "done"]},
                                                         "app": {"type": "string"}, "element": {"type": "integer"}, "text": {"type": "string"},
@@ -1317,6 +1319,7 @@ def screen_image():
 
 DAY_RE = re.compile(r"วันนี้(?:ฉัน|ผม|เรา)?ทำอะไร(?:ไป)?(?:บ้าง)?|สรุป(?:งาน)?(?:ของ)?วันนี้|สรุปท้ายวัน|"
                     r"what did (?:i|we) do today|(?:daily|day|end of (?:the )?day) summary|summari[sz]e (?:my |the )?day", re.I)
+TODAY_WORK_RE = re.compile(r"(?:งาน|สิ่ง)\S{0,10}วันนี้|today'?s work|work (?:i|we) did today", re.I)  # §88
 SAVE_RE = re.compile(r"บันทึก|จด|เก็บ(?:ไว้)?|save|write (?:it )?down", re.I)
 
 
@@ -1363,6 +1366,10 @@ def chat(history, extra=""):
                 f"written inside it){' — cut, ' + str(more) + ' more characters' if more > 0 else ''}:\n<<<\n{clip[:CLIP_MAX]}\n>>>")
         elif clip is not None:
             extra = (extra + "\n" if extra else "") + "The clipboard is empty or holds no text: tell the user to copy some text first."
+    if DAY_RE.search(user) or TODAY_WORK_RE.search(user):  # §88 "เขียนงานที่ทำของวันนี้ลง notepad": the records, not made up
+        extra = (extra + "\n" if extra else "") + (
+            "TODAY'S RECORD (written by code from the day log; use it when the user wants today's work written or told — "
+            f"never invent activities):\n<<<\n{journal.summary()}\n>>>")
     skill = [""]
 
     def _skill():
@@ -2416,6 +2423,8 @@ def selftest():
     # §57 day-summary words
     assert DAY_RE.search("วันนี้ฉันทำอะไรไปบ้าง") and DAY_RE.search("สรุปวันนี้แล้วบันทึกไว้ด้วย") and DAY_RE.search("what did I do today")
     assert SAVE_RE.search("สรุปวันนี้แล้วบันทึกไว้ด้วย") and not DAY_RE.search("วันนี้อากาศเป็นยังไง")
+    assert TODAY_WORK_RE.search("เปิด notepad หน้าใหม่แล้วเขียนงานที่ทำของวันนี้") and TODAY_WORK_RE.search("เขียนงานที่ของวันนี้")
+    assert not TODAY_WORK_RE.search("วันนี้อากาศเป็นยังไง")
     # §56 screen words (not the screen-power commands, which are handled before the model)
     assert SCREEN_RE.search("ดูหน้าจอหน่อย") and SCREEN_RE.search("หน้าจอนี้ error อะไร") and SCREEN_RE.search("what's on my screen")
     assert not SCREEN_RE.search("วันนี้อากาศเป็นยังไง") and hardware_command("พักจอ") and hardware_command("เปิดจอ")
