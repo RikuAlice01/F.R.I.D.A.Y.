@@ -1,0 +1,45 @@
+# environments and downloaded models (recreate with the setup guide)
+.venv/
+.venv-tts/
+models/
+__pycache__/
+
+# personal data: what FRIDAY remembers about you, and the search index built from it
+data/vault/Memory/
+data/vault/.index/
+data/vault/.obsidian/
+
+# runtime logs (tray mode, panel errors): personal conversation text
+*.log
+data/logs/
+
+# chat sessions (personal conversations)
+data/sessions/
+
+
+# security (§33): encrypted secrets, approved-files baseline, folder ACL backup — this PC and account only
+config/secrets.dat
+data/integrity.dat
+data/acl-before-lock.txt
+
+# reminders/alarms (§50): personal
+data/reminders.json
+# to-do list (§52): personal
+data/vault/Tasks.md
+# end-of-day journal (§57): personal
+data/vault/Journal/
+data/greeted.txt
+data/fileindex/
+dist/
+build/
+data/remote/
+installer/stage/
+
+# §77 owner: not in the repo (they stay on this PC)
+/docs/
+/skills/
+/PLAN.md
+/CLAUDE.md
+/Local AI Windows setup.md
+/config/settings.json
+/data/

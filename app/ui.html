@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<title>FRIDAY</title>
+<style>
+  :root {
+    --cyan: #3ee6ff; --violet: #8a5cff; --magenta: #ff4fd8; --blue: #2f7bff;
+    --text: rgba(255, 255, 255, .92); --dim: rgba(255, 255, 255, .55);
+    --glass: rgba(255, 255, 255, .07); --edge: rgba(255, 255, 255, .14);
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; overflow: hidden; background: transparent; }
+  body {
+    /* see-through window; darken from 0 at the screen side to 80% at the right edge. Many eased stops, starting at
+       exactly 0, so the panel melts into the desktop with no visible edge */
+    background: linear-gradient(to right, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, .05) 8%, rgba(0, 0, 0, .17) 18%,
+      rgba(0, 0, 0, .38) 32%, rgba(0, 0, 0, .58) 50%, rgba(0, 0, 0, .72) 70%, rgba(0, 0, 0, .8) 100%);
+    color: var(--text); font: 15px/1.5 "Segoe UI", "Leelawadee UI", sans-serif;
+    display: flex; flex-direction: column; padding: 28px 22px 22px 34px;
+  }
+  /* interactive: darker for reading, but also starting at 0 on the screen side (no edge) */
+  body.interactive {
+    background: linear-gradient(to right, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, .08) 8%, rgba(0, 0, 0, .28) 18%,
+      rgba(0, 0, 0, .55) 32%, rgba(0, 0, 0, .75) 50%, rgba(0, 0, 0, .85) 70%, rgba(0, 0, 0, .9) 100%);
+  }
+  header { display: flex; flex-direction: column; align-items: center; gap: 14px; padding-bottom: 18px; }
+  .brand { letter-spacing: .42em; font-size: 12px; color: var(--dim); text-transform: uppercase; }
+
+  /* ---------- orb: Siri-style fluid core + F.R.I.D.A.Y. HUD rings, drawn on a canvas (§35) ---------- */
+  .orb-wrap { --size: min(30vw, 130px); width: var(--size); height: var(--size); }
+  .orb-wrap canvas { width: 100%; height: 100%; display: block; }
+
+  /* §38 glitter: a canvas under everything; faded with the same left-to-right ramp as the black, so no edge */
+  #glitter {
+    position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0;
+    -webkit-mask-image: linear-gradient(to right, transparent 0%, rgba(0, 0, 0, .25) 18%, rgba(0, 0, 0, .7) 40%, #000 65%);
+    mask-image: linear-gradient(to right, transparent 0%, rgba(0, 0, 0, .25) 18%, rgba(0, 0, 0, .7) 40%, #000 65%);
+  }
+  header, main, .composer { position: relative; z-index: 1; }
+  /* §40 stop: a round ■ at the right end of the input, like ChatGPT/Gemini, only while FRIDAY listens/thinks/speaks */
+  .stop {
+    display: none; flex: none; width: 36px; height: 36px; border-radius: 50%; cursor: pointer; margin-left: 8px;
+    align-items: center; justify-content: center; border: 1px solid rgba(255, 255, 255, .25);
+    background: rgba(255, 255, 255, .92); transition: transform .12s, background .2s;
+  }
+  .stop::before { content: ""; width: 11px; height: 11px; border-radius: 2px; background: #111; }
+  .stop:hover { transform: scale(1.06); background: #fff; }
+  body:not([data-state="idle"]) .stop { display: inline-flex; }
+  .status { font-size: 13px; color: var(--dim); min-height: 1.5em; transition: color .3s; }
+  body[data-state="listening"] .status { color: var(--cyan); }
+  body[data-state="thinking"] .status { color: #b9a4ff; }
+  body[data-state="speaking"] .status { color: #ff9be9; }
+
+  /* ---------- chat preview ---------- */
+  #chat {
+    flex: 1; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 10px;
+    mask-image: linear-gradient(to bottom, transparent 0, #000 18%); scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, .25) transparent; overscroll-behavior: contain;
+  }
+  #chat::before { content: ""; margin-top: auto; }  /* few messages: sit at the bottom; many: scroll normally */
+  .more { align-self: center; font-size: 12px; color: var(--dim); padding: 2px 0 6px; }
+  .msg {
+    max-width: 92%; padding: 9px 13px; border-radius: 14px; word-wrap: break-word; white-space: pre-wrap;
+    /* frosted bubble: blurred copy of the desktop behind the panel (ui.py sends it), lined up with the screen via
+       background-attachment: fixed, under a dark tint so text stays readable over anything */
+    background: linear-gradient(rgba(12, 14, 28, .5), rgba(12, 14, 28, .5)), var(--bd, rgba(12, 14, 28, .6)) center / 100vw 100vh fixed;
+    border: 1px solid var(--edge); box-shadow: 0 4px 18px rgba(0, 0, 0, .25);
+    animation: rise .35s ease-out both;
+  }
+  .msg.user { align-self: flex-end; border-bottom-right-radius: 4px; color: var(--dim); }
+  /* §49 weather card */
+  .msg.weather { align-self: stretch; padding: 14px 16px; border-radius: 18px; background: var(--wx, rgba(40, 90, 140, .35)); }
+  .wx-top { display: flex; align-items: center; gap: 12px; }
+  .wx-top svg { width: 64px; height: 64px; flex: none; overflow: visible; }
+  .wx-temp { font-size: 38px; font-weight: 300; line-height: 1; }
+  .wx-temp small { font-size: 14px; color: var(--dim); margin-left: 4px; }
+  .wx-place { font-size: 12px; color: var(--dim); }
+  .wx-text { font-size: 14px; }
+  .wx-meta { display: flex; gap: 12px; flex-wrap: wrap; margin: 8px 0 10px; font-size: 12px; color: var(--dim); }
+  .wx-days { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; border-top: 1px solid rgba(255, 255, 255, .12); padding-top: 8px; }
+  .wx-day { text-align: center; font-size: 12px; }
+  .wx-day svg { width: 30px; height: 30px; display: block; margin: 2px auto; overflow: visible; }
+  .wx-day .lo { color: var(--dim); margin-left: 4px; }
+  @keyframes wx-spin { to { transform: rotate(360deg); } }
+  @keyframes wx-drift { 50% { transform: translateX(3px); } }
+  @keyframes wx-fall { 0% { transform: translateY(-3px); opacity: 0; } 30% { opacity: 1; } 100% { transform: translateY(7px); opacity: 0; } }
+  @keyframes wx-flash { 0%, 86%, 100% { opacity: 0; } 88%, 92% { opacity: 1; } }
+  .wx-rays { transform-origin: 32px 32px; animation: wx-spin 24s linear infinite; }
+  .wx-cloud { animation: wx-drift 6s ease-in-out infinite; }
+  .wx-drop { animation: wx-fall 1.1s linear infinite; }
+  .wx-bolt { animation: wx-flash 3.2s linear infinite; }
+  .msg.partial { font-style: italic; opacity: .75; border-style: dashed; }
+  .msg.assistant {
+    align-self: flex-start; border-bottom-left-radius: 4px;
+    border-color: rgba(62, 230, 255, .28); box-shadow: 0 0 18px rgba(62, 230, 255, .08);
+  }
+  .msg.tool { align-self: center; font-size: 12px; color: var(--dim); background: none; border: none; padding: 0; }
+  .msg p { margin: 0 0 4px; } .msg p:last-child { margin: 0; }
+  .msg ul, .msg ol { margin: 4px 0 6px; padding-left: 20px; }
+  .msg li { margin: 2px 0; padding-left: 2px; }
+  .msg li::marker { color: var(--cyan); }
+  .msg ol li::marker { font-weight: 600; }
+  .msg li > ul, .msg li > ol { margin: 2px 0 2px; }
+  .msg code { font: 13px Consolas, monospace; background: rgba(255, 255, 255, .1); padding: 0 4px; border-radius: 4px; }
+  .msg .tbl { overflow-x: auto; margin: 4px 0; }
+  .msg table { border-collapse: collapse; font-size: 13px; width: 100%; }
+  .msg th, .msg td { border: 1px solid rgba(255, 255, 255, .18); padding: 3px 7px; text-align: left; vertical-align: top; }
+  .msg th { background: rgba(62, 230, 255, .12); font-weight: 600; }
+  .msg img { display: block; max-width: 100%; max-height: 40vh; border-radius: 8px; margin: 4px 0; }
+  .msg img { cursor: zoom-in; }
+  .msg .img-missing { color: var(--dim); font-size: 12px; }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+  /* ---------- input: interactive (opened from the tray) only. No buttons: Enter sends, Esc closes ---------- */
+  .composer { display: none; margin-top: 12px; }
+  body.interactive .composer { display: flex; }
+  .composer input {
+    flex: 1; min-width: 0; padding: 9px 12px; border-radius: 12px; border: 1px solid var(--edge);
+    background: rgba(255, 255, 255, .08); color: var(--text); font: inherit; outline: none;
+  }
+  .composer input:focus { border-color: rgba(62, 230, 255, .55); box-shadow: 0 0 0 3px rgba(62, 230, 255, .12); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .msg { animation: none; }
+  }
+</style>
+</head>
+<body data-state="idle">
+  <canvas id="glitter" aria-hidden="true"></canvas>
+  <header>
+    <div class="brand">F.R.I.D.A.Y.</div>
+    <div class="orb-wrap" aria-hidden="true"><canvas id="orb"></canvas></div>
+    <div class="status" id="status" role="status" aria-live="polite"></div>
+  </header>
+  <main id="chat" aria-live="polite"></main>
+  <form class="composer" id="composer">
+    <input id="input" autocomplete="off" placeholder="พิมพ์ถึง FRIDAY… (Enter ส่ง · Esc ปิด)" aria-label="พิมพ์ข้อความ">
+    <button class="stop" id="stop" type="button" title="หยุด" aria-label="หยุด"></button>
+  </form>
+<script>
+  const LABEL = { idle: "", listening: "กำลังฟัง…", thinking: "กำลังคิด…", speaking: "กำลังพูด…" };
+  const PAGE = 20;      // messages shown per page; older pages load when scrolled to the top
+  let loaded = 0, more = false, loading = false, images = {};
+  const chat = document.getElementById("chat"), status = document.getElementById("status");
+  const input = document.getElementById("input");
+  const post = (o) => window.pywebview && window.pywebview.api.post(o);  // -> ui.py stdout -> friday.py
+
+  // ---- §38 background glitter (Gemini-like): slow aurora glows + drifting twinkling specks + now and then a
+  //      four-point sparkle. Under the black fade, 30 fps, nothing drawn while the panel is hidden. ----
+  const Glitter = (() => {
+    const cv = document.getElementById("glitter"), ctx = cv.getContext("2d");
+    const COLORS = [[62, 230, 255], [138, 92, 255], [255, 79, 216], [120, 170, 255], [255, 255, 255]];
+    let W = 0, H = 0, specks = [], glints = [], visible = true, raf = 0, last = 0, t = 0, nextGlint = 0, lit = .5;
+    const rnd = (a, b) => a + Math.random() * (b - a);
+    function fit() {
+      const d = devicePixelRatio || 1;
+      W = innerWidth; H = innerHeight;
+      cv.width = Math.round(W * d); cv.height = Math.round(H * d);
+      ctx.setTransform(d, 0, 0, d, 0, 0);
+      specks = Array.from({ length: Math.round(W * H / 4500) }, () => ({
+        x: rnd(0, W), y: rnd(0, H), r: rnd(.35, 1.3), v: rnd(3, 11), ph: rnd(0, 6.3), f: rnd(.6, 2.2),
+        c: COLORS[(Math.random() * COLORS.length) | 0] }));
+    }
+    function frame(now) {
+      raf = 0;
+      if (!visible || document.hidden) return;
+      if (now - last < 33) { raf = requestAnimationFrame(frame); return; }
+      const dt = Math.min(.1, (now - (last || now)) / 1000); last = now; t += dt;
+      const busy = document.body.dataset.state !== "idle";
+      lit += ((busy ? 1 : .55) - lit) * Math.min(1, dt * 2);     // a little brighter while FRIDAY is active
+      ctx.clearRect(0, 0, W, H);
+      ctx.globalCompositeOperation = "lighter";
+      // aurora: three big soft glows drifting
+      [[.75, .18, 138, 92, 255], [.55, .55, 62, 160, 255], [.85, .85, 255, 79, 216]].forEach(([fx, fy, r, g, b], i) => {
+        const x = W * (fx + .12 * Math.sin(t * .11 + i * 2)), y = H * (fy + .08 * Math.cos(t * .09 + i));
+        const R = Math.max(W, H) * (.45 + .08 * Math.sin(t * .2 + i));
+        const gr = ctx.createRadialGradient(x, y, 0, x, y, R);
+        gr.addColorStop(0, `rgba(${r},${g},${b},${.09 * lit})`); gr.addColorStop(1, `rgba(${r},${g},${b},0)`);
+        ctx.fillStyle = gr; ctx.fillRect(0, 0, W, H);
+      });
+      // specks: rise slowly and twinkle
+      for (const p of specks) {
+        p.y -= p.v * dt; if (p.y < -4) { p.y = H + 4; p.x = rnd(0, W); }
+        const a = (.25 + .75 * Math.max(0, Math.sin(t * p.f + p.ph))) * .55 * lit;
+        ctx.fillStyle = `rgba(${p.c[0]},${p.c[1]},${p.c[2]},${a})`;
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 6.3); ctx.fill();
+      }
+      // four-point sparkles that bloom and fade
+      if (t > nextGlint) {
+        glints.push({ x: rnd(W * .3, W), y: rnd(0, H), s: rnd(5, 11), born: t, life: rnd(.9, 1.6), c: COLORS[(Math.random() * 4) | 0] });
+        nextGlint = t + rnd(.6, 1.8) / lit;
+      }
+      glints = glints.filter((g) => t - g.born < g.life);
+      for (const g of glints) {
+        const k = (t - g.born) / g.life, a = Math.sin(k * Math.PI), s = g.s * (.4 + a * .8);
+        ctx.save(); ctx.translate(g.x, g.y); ctx.rotate(k * .6);
+        const gr = ctx.createRadialGradient(0, 0, 0, 0, 0, s);
+        gr.addColorStop(0, `rgba(255,255,255,${.9 * a})`); gr.addColorStop(.3, `rgba(${g.c[0]},${g.c[1]},${g.c[2]},${.6 * a})`);
+        gr.addColorStop(1, `rgba(${g.c[0]},${g.c[1]},${g.c[2]},0)`);
+        ctx.fillStyle = gr;
+        ctx.beginPath();  // four thin points
+        for (let i = 0; i < 8; i++) { const ang = i * Math.PI / 4, rr = i % 2 ? s * .18 : s; ctx.lineTo(Math.cos(ang) * rr, Math.sin(ang) * rr); }
+        ctx.closePath(); ctx.fill();
+        ctx.restore();
+      }
+      raf = requestAnimationFrame(frame);
+    }
+    function wake() { if (!raf && visible) { last = 0; raf = requestAnimationFrame(frame); } }
+    addEventListener("resize", () => { fit(); wake(); });
+    document.addEventListener("visibilitychange", wake);
+    fit(); wake();
+    return { visible(v) { visible = !!v; wake(); } };
+  })();
+
+  function setState(s) {
+    document.body.dataset.state = s;
+    status.textContent = LABEL[s] ?? "";
+    Orb.state(s);
+  }
+
+  // ---- orb engine (§35): a Siri-style living sphere and nothing around it (owner: no outer frame, keep it simple).
+  //      Colour blobs swirl inside, added together like light; the outline itself breathes and ripples, faster and
+  //      deeper with the real voice level (mic while listening, FRIDAY's own audio while speaking: {level} events).
+  //      Always animates, even with Windows "animation effects" off: that setting made the page report
+  //      prefers-reduced-motion and the orb froze on its first frame (owner: "นิ่งเกินไป"). Stops when hidden. ----
+  const Orb = (() => {
+    const cv = document.getElementById("orb"), ctx = cv.getContext("2d");
+    const LOOK = {   // colours, glow tint, swirl speed, ripple, glow
+      idle:      { c: ["#3ee6ff", "#8a5cff", "#2f7bff", "#ff4fd8"], tint: [62, 200, 255], speed: .7, wave: .35, glow: .45 },
+      listening: { c: ["#3ee6ff", "#29b6ff", "#7af0ff", "#8a5cff"], tint: [62, 230, 255], speed: .8, wave: .4, glow: .75 },
+      thinking:  { c: ["#8a5cff", "#b45cff", "#3ee6ff", "#ff4fd8"], tint: [160, 110, 255], speed: 1.0, wave: .4, glow: .7 },  // §48: calm
+      speaking:  { c: ["#ff4fd8", "#ff8a3d", "#8a5cff", "#3ee6ff"], tint: [255, 120, 210], speed: 1.1, wave: .6, glow: .85 },
+    };
+    let look = LOOK.idle, cur = { speed: .7, wave: .35, glow: .45, tint: [62, 200, 255] };
+    let level = 0, target = 0, lastLevelAt = 0, visible = true, raf = 0, last = 0, t = 0, size = 0, drawn = 0;
+    const mix = (a, b, k) => a + (b - a) * k;
+    const rgba = (c, a) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
+    const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+
+    function fit() {
+      const r = cv.getBoundingClientRect(), d = devicePixelRatio || 1;
+      size = r.width;
+      cv.width = Math.round(r.width * d); cv.height = Math.round(r.height * d);
+      ctx.setTransform(d, 0, 0, d, 0, 0);
+    }
+
+    function frame(now) {
+      raf = 0;
+      if (!visible || document.hidden) return;              // hidden panel: no drawing at all
+      const idle = document.body.dataset.state === "idle";
+      if (now - last < (idle ? 33 : 16)) { raf = requestAnimationFrame(frame); return; }  // 30 fps idle, 60 active (a 240 Hz screen ran it at 240)
+      const dt = Math.min(.1, (now - (last || now)) / 1000); last = now; t += dt;
+      try { draw(dt); drawn++; } catch (err) { if (!window.__orbErr) { window.__orbErr = 1; post({ orb_error: String(err && err.stack || err) }); } }
+      raf = requestAnimationFrame(frame);
+    }
+
+    // the sphere's outline: a circle rippled by a few travelling sine waves; bigger ripples with the voice
+    function outline(c, R, tt, L) {
+      const amp = .022 + cur.wave * .015 + L * .04;   // §47: a gentle ripple, not a shake
+      ctx.beginPath();
+      for (let k = 0; k <= 96; k++) {
+        const a = k / 96 * Math.PI * 2;
+        const r = R * (1 + amp * (.55 * Math.sin(3 * a + tt * 1.7) + .3 * Math.sin(5 * a - tt * 2.3) + .25 * Math.sin(2 * a + tt * .9)));
+        k ? ctx.lineTo(c + Math.cos(a) * r, c + Math.sin(a) * r) : ctx.moveTo(c + Math.cos(a) * r, c + Math.sin(a) * r);
+      }
+      ctx.closePath();
+    }
+
+    function draw(dt) {
+      if (!size) fit();
+      const k = Math.min(1, dt * 3);                        // ease between states
+      for (const p of ["speed", "wave", "glow"]) cur[p] = mix(cur[p], look[p], k);
+      cur.tint = cur.tint.map((v, i) => mix(v, look.tint[i], k));
+      if (performance.now() - lastLevelAt > 200) target *= .85;  // no fresh level: fall back to rest
+      level = mix(level, target, Math.min(1, dt * (target > level ? 6 : 3)));  // §47: rise softly, fall slower
+      const W = size, c = W / 2, L = level, tt = t * cur.speed, tint = cur.tint;
+      const R = W * .33 * (1 + Math.sin(t * 1.9) * .035 + L * .06);   // breathing + a small voice swell
+      ctx.clearRect(0, 0, W, W);
+
+      // soft glow behind
+      let g = ctx.createRadialGradient(c, c, R * .5, c, c, W / 2);
+      const think = document.body.dataset.state === "thinking" ? .12 * (1 + Math.sin(t * 2.2)) : 0;  // slow glow "breath"
+      g.addColorStop(0, rgba(tint, .28 * cur.glow + L * .25 + think)); g.addColorStop(1, rgba(tint, 0));
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, W);
+
+      // sphere: dark body + swirling additive colour blobs, clipped to the rippling outline
+      ctx.save();
+      outline(c, R, tt, L); ctx.clip();
+      g = ctx.createRadialGradient(c, c, 0, c, c, R * 1.2);
+      g.addColorStop(0, "#0d1230"); g.addColorStop(1, "#04050c");
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, W);
+      ctx.globalCompositeOperation = "lighter";
+      look.c.forEach((col, i) => {
+        const ph = i * 1.7, a = tt * (.8 + i * .33) + ph;
+        const orbit = R * (.32 + .2 * Math.sin(t * .9 + ph * 1.3)) * (1 + L * .3);
+        const x = c + Math.cos(a) * orbit, y = c + Math.sin(a * 1.27 + ph) * orbit;
+        const br = R * (.62 + .25 * Math.sin(t * 1.7 + ph * 2) + L * .2);
+        const rgb = hex(col), gg = ctx.createRadialGradient(x, y, 0, x, y, br);
+        gg.addColorStop(0, rgba(rgb, .9)); gg.addColorStop(.5, rgba(rgb, .32)); gg.addColorStop(1, rgba(rgb, 0));
+        ctx.fillStyle = gg; ctx.fillRect(0, 0, W, W);
+      });
+      // a slow bright swirl through the middle, plus voice ribbons while there is sound
+      ctx.lineCap = "round";
+      ctx.strokeStyle = "rgba(255,255,255,.18)"; ctx.lineWidth = R * .16;
+      ctx.beginPath(); ctx.arc(c, c, R * .55, tt * .9, tt * .9 + 1.6); ctx.stroke();
+      if (L > .03) {
+        for (let w = 0; w < 3; w++) {
+          ctx.lineWidth = 1.1 - w * .25; ctx.strokeStyle = `rgba(255,255,255,${(.1 + L * .22) * (1 - w * .25)})`;
+          ctx.beginPath();
+          for (let x = -R; x <= R; x += 2) {
+            const env = Math.cos(x / R * Math.PI / 2) ** 2;
+            const y = Math.sin(x / R * (3 + w) + tt * (4 + w * 1.9) + w * 2.1) * R * (.18 + .4 * L) * env * (1 - w * .22);
+            x === -R ? ctx.moveTo(c + x, c + y) : ctx.lineTo(c + x, c + y);
+          }
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+      // glass: a highlight and a faint rim that follows the ripple
+      g = ctx.createRadialGradient(c - R * .35, c - R * .42, 0, c - R * .35, c - R * .42, R * .75);
+      g.addColorStop(0, "rgba(255,255,255,.32)"); g.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = g; outline(c, R, tt, L); ctx.fill();
+      ctx.lineWidth = 1; ctx.strokeStyle = rgba(tint, .3 + L * .45); ctx.stroke();
+    }
+
+    function wake() { if (!raf && visible) { last = 0; raf = requestAnimationFrame(frame); } }
+    addEventListener("resize", () => { fit(); wake(); });
+    document.addEventListener("visibilitychange", wake);
+    requestAnimationFrame(() => { fit(); wake(); });
+    return {
+      state(s) { look = LOOK[s] || LOOK.idle; if (s === "idle" || s === "thinking") target = 0; wake(); },
+      level(v) { target = Math.max(0, Math.min(1, +v || 0)); lastLevelAt = performance.now(); wake(); },
+      visible(v) { visible = !!v; wake(); },
+      probe() { const n0 = drawn; setTimeout(() => post({ fps: (drawn - n0) / 2, hidden: document.hidden, visible }), 2000); },
+    };
+  })();
+  // ---- tiny Markdown: tables, images, lists, **bold**, `code`. Built with createElement/textContent only:
+  //      model output is never parsed as HTML ----
+  const IMG_MD = /!\[([^\]]*)\]\(<?([^)>]+)>?\)|!\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g;
+  const IMG_PATH = /[A-Za-z]:\\[^\s"'<>|*?]+?\.(?:png|jpe?g|gif|webp|bmp)/gi;
+  function inline(el, text) {
+    for (const part of text.split(/(\*\*[^*]+\*\*|`[^`]+`)/)) {
+      if (!part) continue;
+      let n;
+      if (part.startsWith("**") && part.endsWith("**") && part.length > 4) { n = document.createElement("strong"); n.textContent = part.slice(2, -2); }
+      else if (part.startsWith("`") && part.endsWith("`") && part.length > 2) { n = document.createElement("code"); n.textContent = part.slice(1, -1); }
+      else n = document.createTextNode(part);
+      el.appendChild(n);
+    }
+  }
+  function image(ref, alt) {
+    const src = images[ref.trim()];
+    if (src) {
+      const i = document.createElement("img"); i.src = src; i.alt = alt || ref; i.title = "คลิกเพื่อดูเต็มจอ";
+      i.onclick = () => post({ cmd: "view", ref: ref.trim() });  // Windows Photos: full screen + zoom
+      return i;
+    }
+    const m = document.createElement("div"); m.className = "img-missing"; m.textContent = "🖼 " + ref; return m;
+  }
+  const cells = (l) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
+  // ---- lists (§45): - * • bullets, 1. 1) numbers, one nested level by indent; "1. a 2. b 3. c" on one line is split ----
+  const LIST_ITEM = /^(\s*)([-*•]|\d{1,2}[.)])\s+/;
+  function list(el, lines, i) {
+    const first = LIST_ITEM.exec(lines[i]), ordered = /\d/.test(first[2]), base = first[1].length;
+    const box = document.createElement(ordered ? "ol" : "ul");
+    let li = null;
+    while (i < lines.length) {
+      const m = LIST_ITEM.exec(lines[i]);
+      if (!m) {
+        if (li && lines[i].trim() && /^\s{2,}/.test(lines[i])) { inline(li, " " + lines[i].trim()); i++; continue; }  // wrapped item
+        break;
+      }
+      if (m[1].length > base && li) { i = list(li, lines, i); continue; }   // deeper indent: a sub-list inside this item
+      if (m[1].length < base || /\d/.test(m[2]) !== ordered) break;
+      li = document.createElement("li"); inline(li, lines[i].slice(m[0].length)); box.appendChild(li); i++;
+    }
+    el.appendChild(box);
+    return i;
+  }
+  function splitInline(text) {   // a run-on "… 1. aaa 2. bbb 3. ccc" becomes one item per line
+    return text.split("\n").map((l) => {
+      if (LIST_ITEM.test(l) || (l.match(/(?:^|\s)\d{1,2}[.)]\s/g) || []).length < 3) return l;
+      return l.replace(/\s+(?=\d{1,2}[.)]\s)/g, "\n");
+    }).join("\n");
+  }
+  function render(el, text) {
+    const lines = splitInline(text).split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i];
+      if (/^\s*\|/.test(l) && i + 1 < lines.length && /^\s*\|?\s*:?-{3,}/.test(lines[i + 1])) {   // table
+        const wrap = document.createElement("div"); wrap.className = "tbl";
+        const t = document.createElement("table"), head = t.createTHead().insertRow();
+        for (const c of cells(l)) { const th = document.createElement("th"); inline(th, c); head.appendChild(th); }
+        const body = t.createTBody(); i += 2;
+        for (; i < lines.length && /^\s*\|/.test(lines[i]); i++) {
+          const r = body.insertRow();
+          for (const c of cells(lines[i])) inline(r.insertCell(), c);
+        }
+        i--; wrap.appendChild(t); el.appendChild(wrap); continue;
+      }
+      if (LIST_ITEM.test(l)) {                                                                     // list (§45)
+        i = list(el, lines, i) - 1; continue;
+      }
+      if (!l.trim()) continue;
+      const p = document.createElement("p"); let rest = l, last = 0, m;            // text with images in it
+      const refs = [];
+      IMG_MD.lastIndex = 0;
+      while ((m = IMG_MD.exec(l))) refs.push({ at: m.index, len: m[0].length, ref: m[2] || m[3], alt: m[1] });
+      if (!refs.length) { IMG_PATH.lastIndex = 0; while ((m = IMG_PATH.exec(l))) refs.push({ at: m.index, len: m[0].length, ref: m[0] }); }
+      for (const r of refs) { inline(p, l.slice(last, r.at)); if (p.childNodes.length) { el.appendChild(p.cloneNode(true)); p.replaceChildren(); } el.appendChild(image(r.ref, r.alt)); last = r.at + r.len; }
+      inline(p, l.slice(last)); if (p.childNodes.length) el.appendChild(p);
+    }
+  }
+  function bubble(role, text) {
+    const d = document.createElement("div");
+    d.className = "msg " + role;
+    if (role === "tool") d.textContent = text; else render(d, text);
+    return d;
+  }
+  const atBottom = () => chat.scrollHeight - chat.scrollTop - chat.clientHeight < 40;
+  function addMsg(role, text) {
+    const stick = atBottom();
+    chat.appendChild(bubble(role, text)); loaded++;
+    if (!document.body.classList.contains("interactive")) {        // passive preview: keep only the latest page
+      while (chat.querySelectorAll(".msg").length > PAGE) chat.querySelector(".msg").remove();
+    }
+    if (stick) chat.scrollTop = chat.scrollHeight;
+  }
+  // ---- §49 weather card: icons drawn as SVG with createElementNS (no HTML parsing); all text via textContent ----
+  const SVG = "http://www.w3.org/2000/svg";
+  function el(tag, attrs, parent) {
+    const n = document.createElementNS(SVG, tag);
+    for (const [k, v] of Object.entries(attrs || {})) n.setAttribute(k, v);
+    if (parent) parent.appendChild(n);
+    return n;
+  }
+  function cloud(g, dx, dy, fill) {
+    const c = el("g", { class: "wx-cloud", transform: `translate(${dx} ${dy})` }, g);
+    el("path", { d: "M18 46h28a10 10 0 0 0 0-20 14 14 0 0 0-27-3 10 10 0 0 0-1 23z", fill }, c);
+    return c;
+  }
+  function sun(g, cx, cy, r) {
+    const rays = el("g", { class: "wx-rays", style: `transform-origin:${cx}px ${cy}px` }, g);
+    for (let i = 0; i < 8; i++) {
+      const a = i * Math.PI / 4;
+      el("line", { x1: cx + Math.cos(a) * (r + 4), y1: cy + Math.sin(a) * (r + 4), x2: cx + Math.cos(a) * (r + 9), y2: cy + Math.sin(a) * (r + 9),
+                   stroke: "#ffd166", "stroke-width": 3, "stroke-linecap": "round" }, rays);
+    }
+    el("circle", { cx, cy, r, fill: "#ffcf4a" }, g);
+  }
+  function moon(g, cx, cy) {
+    el("path", { d: `M${cx + 6} ${cy - 13}a14 14 0 1 0 8 22 11 11 0 0 1-8-22z`, fill: "#dfe6ff" }, g);
+  }
+  function wxIcon(kind) {
+    const s = el("svg", { viewBox: "0 0 64 64", "aria-hidden": "true" });
+    const g = el("g", {}, s);
+    if (kind === "clear") sun(g, 32, 32, 12);
+    else if (kind === "night") moon(g, 30, 32);
+    else if (kind === "partly") { sun(g, 24, 24, 9); cloud(g, 2, 8, "#e9eef7"); }
+    else if (kind === "night-partly") { moon(g, 24, 24); cloud(g, 2, 8, "#cfd8e8"); }
+    else if (kind === "fog") { cloud(g, 0, -4, "#c9d1de"); for (let i = 0; i < 3; i++) el("line", { x1: 12 + i * 3, y1: 48 + i * 6, x2: 52 - i * 2, y2: 48 + i * 6, stroke: "#c9d1de", "stroke-width": 3, "stroke-linecap": "round", class: "wx-cloud" }, g); }
+    else {
+      cloud(g, 0, -4, kind === "storm" ? "#9aa6bd" : kind === "cloud" ? "#d8dfeb" : "#b8c4d8");
+      if (kind === "rain" || kind === "storm") for (let i = 0; i < 3; i++) {
+        const d = el("line", { x1: 22 + i * 9, y1: 46, x2: 19 + i * 9, y2: 53, stroke: "#5ec8ff", "stroke-width": 3, "stroke-linecap": "round", class: "wx-drop" }, g);
+        d.style.animationDelay = `${i * .35}s`;
+      }
+      if (kind === "snow") for (let i = 0; i < 3; i++) { const f = el("circle", { cx: 22 + i * 9, cy: 50, r: 2.5, fill: "#fff", class: "wx-drop" }, g); f.style.animationDelay = `${i * .35}s`; }
+      if (kind === "storm") el("path", { d: "M33 40l-6 11h6l-3 9 9-13h-6l3-7z", fill: "#ffd166", class: "wx-bolt" }, g);
+    }
+    return s;
+  }
+  function tempColour(t) {   // card tint: cool blue -> teal -> amber -> hot orange
+    return t < 20 ? "linear-gradient(135deg, rgba(60,120,220,.45), rgba(40,60,120,.35))"
+         : t < 28 ? "linear-gradient(135deg, rgba(40,170,190,.42), rgba(30,80,120,.35))"
+         : t < 33 ? "linear-gradient(135deg, rgba(230,160,60,.42), rgba(120,70,40,.35))"
+         :          "linear-gradient(135deg, rgba(240,100,60,.48), rgba(130,40,40,.38))";
+  }
+  function addWeather(w) {
+    const d = document.createElement("div"); d.className = "msg weather";
+    d.style.setProperty("--wx", tempColour(w.temp));
+    const top = document.createElement("div"); top.className = "wx-top"; d.appendChild(top);
+    top.appendChild(wxIcon(w.icon));
+    const right = document.createElement("div"); top.appendChild(right);
+    const place = document.createElement("div"); place.className = "wx-place"; place.textContent = w.place; right.appendChild(place);
+    const temp = document.createElement("div"); temp.className = "wx-temp"; temp.textContent = `${w.temp}°`; right.appendChild(temp);
+    const hl = document.createElement("small"); hl.textContent = `${w.hi}° / ${w.lo}°`; temp.appendChild(hl);
+    const text = document.createElement("div"); text.className = "wx-text"; text.textContent = w.text; right.appendChild(text);
+    const meta = document.createElement("div"); meta.className = "wx-meta"; d.appendChild(meta);
+    for (const t of [`รู้สึก ${w.feels}°`, `ความชื้น ${w.humidity}%`, `ลม ${w.wind} กม./ชม.`, `ฝน ${w.rain_today}%`]) {
+      const s = document.createElement("span"); s.textContent = t; meta.appendChild(s);
+    }
+    const days = document.createElement("div"); days.className = "wx-days"; d.appendChild(days);
+    for (const x of w.days || []) {
+      const c = document.createElement("div"); c.className = "wx-day"; c.title = `${x.text} · ฝน ${x.rain}%`;
+      const n = document.createElement("div"); n.textContent = x.day; c.appendChild(n);
+      c.appendChild(wxIcon(x.icon));
+      const t = document.createElement("div"); t.textContent = `${x.hi}°`; const lo = document.createElement("span"); lo.className = "lo"; lo.textContent = `${x.lo}°`; t.appendChild(lo); c.appendChild(t);
+      days.appendChild(c);
+    }
+    const stick = atBottom();
+    chat.appendChild(d);
+    if (stick) chat.scrollTop = chat.scrollHeight;
+  }
+  function moreMarker() {
+    chat.querySelector(".more")?.remove();
+    if (more) { const m = document.createElement("div"); m.className = "more"; m.textContent = "↑ เลื่อนขึ้นเพื่อดูข้อความก่อนหน้า"; chat.prepend(m); }
+  }
+  chat.addEventListener("scroll", () => {
+    if (chat.scrollTop < 30 && more && !loading && document.body.classList.contains("interactive")) {
+      loading = true; post({ cmd: "older", have: loaded });
+    }
+  });
+  document.getElementById("composer").onsubmit = (ev) => {
+    ev.preventDefault();
+    const t = input.value.trim();
+    if (t) { post({ input: t }); input.value = ""; }
+  };
+  document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") post({ close: true }); });
+  document.getElementById("stop").onclick = () => post({ cmd: "stop" });
+
+  window.friday = {
+    event(e) {
+      if (e.images) Object.assign(images, e.images);
+      if (e.reset) {
+        chat.replaceChildren(); loaded = 0;
+        for (const m of e.reset) { chat.appendChild(bubble(m.role, m.text)); loaded++; }
+        more = !!e.more; moreMarker(); chat.scrollTop = chat.scrollHeight;
+      }
+      if (e.older) {                                    // prepend one page, keep the view where it was
+        const h = chat.scrollHeight;
+        chat.querySelector(".more")?.remove();
+        const first = chat.querySelector(".msg");
+        for (const m of e.older) { chat.insertBefore(bubble(m.role, m.text), first); loaded++; }
+        more = !!e.more; moreMarker();
+        chat.scrollTop += chat.scrollHeight - h; loading = false;
+      }
+      if (e.state) setState(e.state);
+      if ("level" in e) Orb.level(e.level);
+      if ("visible" in e) { Orb.visible(e.visible); Glitter.visible(e.visible); }
+      if (e.probe) Orb.probe();
+      // live caption while the user speaks: one bubble, replaced as it grows, gone when the real message arrives
+      if (e.msg || e.state === "idle" || e.reset || e.partial === "") chat.querySelector(".msg.partial")?.remove();
+      if (e.partial) {
+        let p = chat.querySelector(".msg.partial");
+        if (!p) { p = document.createElement("div"); p.className = "msg user partial"; chat.appendChild(p); }
+        p.textContent = e.partial + " …";
+        chat.scrollTop = chat.scrollHeight;
+      }
+      if (e.msg) addMsg(e.msg.role, e.msg.text);
+      if (e.weather) addWeather(e.weather);
+      if (e.backdrop) document.body.style.setProperty("--bd", `url("${e.backdrop}")`);
+      if ("interactive" in e) {
+        document.body.classList.toggle("interactive", e.interactive);
+        if (e.interactive) setTimeout(() => input.focus(), 60);
+      }
+    }
+  };
+</script>
+</body>
+</html>
