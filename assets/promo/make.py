@@ -45,7 +45,7 @@ from PIL import Image
 Image.open(os.path.join(HERE, "panel.png")).crop((0, 0, 860, 1720)).save(os.path.join(HERE, "panel.png"))
 # 2. the layout
 shutil.copy(PHONE, os.path.join(HERE, "phone.png"))
-edge("file:///" + os.path.join(HERE, "promo.html").replace("\\", "/"), os.path.join(HERE, "friday-promo.png"), 1600, 2140)
+edge("file:///" + os.path.join(HERE, "promo.html").replace("\\", "/"), os.path.join(HERE, "friday-promo.png"), 1600, 2330)
 for f in ("panel.png", "phone.png"):
     os.remove(os.path.join(HERE, f))
 shutil.rmtree(tmp, ignore_errors=True)

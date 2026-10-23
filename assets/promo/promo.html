@@ -4,17 +4,22 @@
 <meta charset="utf-8">
 <title>F.R.I.D.A.Y.</title>
 <style>
+  /* Prompt (Cadson Demak, OFL — fonts/OFL.txt), kept here so rendering never needs the network */
+  @font-face { font-family: Prompt; font-weight: 400; src: url(fonts/Prompt-Regular.ttf); }
+  @font-face { font-family: Prompt; font-weight: 500; src: url(fonts/Prompt-Medium.ttf); }
+  @font-face { font-family: Prompt; font-weight: 600; src: url(fonts/Prompt-SemiBold.ttf); }
+  @font-face { font-family: Prompt; font-weight: 700; src: url(fonts/Prompt-Bold.ttf); }
   * { box-sizing: border-box; margin: 0; }
   body {
     width: 1600px; background: #fff; color: #1d1d1f;
-    font-family: "Segoe UI Variable Display", "Segoe UI", "Leelawadee UI", sans-serif;
+    font-family: Prompt, sans-serif;
     -webkit-font-smoothing: antialiased; padding: 110px 0 120px;
   }
   .hero { text-align: center; }
-  .eyebrow { font-size: 22px; letter-spacing: .5em; color: #86868b; font-weight: 600; text-indent: .5em; }
-  h1 { font-size: 104px; font-weight: 700; letter-spacing: -.02em; margin-top: 18px; line-height: 1.02; }
-  h1 .grad { background: linear-gradient(90deg, #00b8e6 0%, #6a5cff 55%, #c04fd8 100%); -webkit-background-clip: text; color: transparent; }
-  .sub { font-size: 32px; color: #6e6e73; margin-top: 22px; font-weight: 400; }
+  .eyebrow { font-size: 22px; letter-spacing: .5em; color: #86868b; font-weight: 500; text-indent: .5em; }
+  h1 { font-size: 96px; font-weight: 600; letter-spacing: -.01em; margin-top: 22px; line-height: 1.45; }
+  h1 .grad { display: inline-block; padding: .08em .04em .12em; background: linear-gradient(90deg, #00b8e6 0%, #6a5cff 55%, #c04fd8 100%); -webkit-background-clip: text; color: transparent; }
+  .sub { font-size: 30px; color: #6e6e73; margin-top: 18px; font-weight: 400; line-height: 1.6; }
 
   .stage { position: relative; height: 900px; margin: 90px auto 0; width: 1500px; }
   /* desktop: a thin-bezel monitor, wallpaper, the real FRIDAY panel on the right edge */
@@ -47,8 +52,8 @@
   .label { position: absolute; font-size: 22px; color: #86868b; font-weight: 600; }
 
   .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 64px 70px; width: 1320px; margin: 120px auto 0; }
-  .f h3 { font-size: 30px; font-weight: 700; margin-top: 18px; letter-spacing: -.01em; }
-  .f p { font-size: 22px; line-height: 1.5; color: #6e6e73; margin-top: 10px; }
+  .f h3 { font-size: 28px; font-weight: 600; line-height: 1.5; margin-top: 18px; letter-spacing: -.01em; }
+  .f p { font-size: 21px; line-height: 1.7; font-weight: 400; color: #6e6e73; margin-top: 10px; }
   .icon { width: 56px; height: 56px; border-radius: 16px; display: grid; place-items: center; font-size: 30px;
           background: linear-gradient(135deg, #e9f7ff, #efeaff); }
   .foot-note { text-align: center; font-size: 18px; color: #a1a1a6; margin-top: 110px; }
