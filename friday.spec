@@ -19,7 +19,7 @@ for pkg in ("ctranslate2", "faster_whisper", "onnxruntime", "sherpa_onnx", "open
             "pystray", "winrt", "clr_loader", "pythonnet", "docx", "pptx", "openpyxl", "pypdf",
             "sounddevice", "_sounddevice_data", "monitorcontrol", "comtypes", "pycaw", "qrcode",
             "vaniratts", "vachanatts", "vachana_g2p", "pythainlp", "pycrfsuite", "ssg",
-            "cryptography", "segno"):  # Thai voice + its word data
+            "cryptography", "segno", "anthropic"):  # Thai voice + its word data · phone TLS · QR · §84 Claude brain
     try:
         d, b, h = collect_all(pkg)
     except Exception:
@@ -34,7 +34,7 @@ for dll in glob.glob(os.path.join(site, "nvidia", "*", "bin", "*.dll")):  # cuBL
 # modules friday.py imports by name at run time
 hidden += ["ui", "tts_th", "memory", "rules", "docsearch", "wakeword", "sessions", "skills", "documents", "hardware",
            "security", "workspace", "weather", "reminders", "media", "tasks", "windows", "journal", "voiceid",
-           "remote"]
+           "remote", "brain", "brain_claude", "brain_openai"]
 
 a = Analysis(["app/friday.py"], pathex=["app"], datas=datas, binaries=binaries, hiddenimports=hidden,
              excludes=["torch", "tensorflow", "matplotlib", "IPython", "pytest"])

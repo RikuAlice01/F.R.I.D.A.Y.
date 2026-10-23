@@ -26,6 +26,9 @@
   }
   header { display: flex; flex-direction: column; align-items: center; gap: 14px; padding-bottom: 18px; }
   .brand { letter-spacing: .42em; font-size: 12px; color: var(--dim); text-transform: uppercase; }
+  /* §84 shown only while a cloud brain thinks: the owner always sees that the conversation leaves the PC */
+  .brain { font-size: 11px; color: var(--cyan); margin-top: -8px; min-height: 0; }
+  .brain:empty { display: none; }
 
   /* ---------- orb: Siri-style fluid core + F.R.I.D.A.Y. HUD rings, drawn on a canvas (§35) ---------- */
   .orb-wrap { --size: min(30vw, 130px); width: var(--size); height: var(--size); }
@@ -130,6 +133,7 @@
   <canvas id="glitter" aria-hidden="true"></canvas>
   <header>
     <div class="brand">F.R.I.D.A.Y.</div>
+    <div class="brain" id="brain"></div>
     <div class="orb-wrap" aria-hidden="true"><canvas id="orb"></canvas></div>
     <div class="status" id="status" role="status" aria-live="polite"></div>
   </header>
@@ -536,6 +540,7 @@
         more = !!e.more; moreMarker();
         chat.scrollTop += chat.scrollHeight - h; loading = false;
       }
+      if ("brain" in e) document.getElementById("brain").textContent = e.brain || "";
       if (e.state) setState(e.state);
       if ("level" in e) Orb.level(e.level);
       if ("visible" in e) { Orb.visible(e.visible); Glitter.visible(e.visible); }
