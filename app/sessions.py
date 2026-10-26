@@ -21,10 +21,11 @@ def _chat_only(msgs):
 
 
 class Sessions:
-    def __init__(self):
-        os.makedirs(DIR, exist_ok=True)
+    def __init__(self, directory=None):
+        self.dir = directory or DIR  # §102 a project keeps its own sessions in its own folder
+        os.makedirs(self.dir, exist_ok=True)
         self.meta = {}  # id -> {id, title, parent, created, updated, kind}
-        for f in os.listdir(DIR):
+        for f in os.listdir(self.dir):
             if f.endswith(".json"):
                 try:
                     s = self._read(f[:-5])
@@ -39,7 +40,7 @@ class Sessions:
 
     # ---------- storage ----------
     def _path(self, sid):
-        return os.path.join(DIR, sid + ".json")
+        return os.path.join(self.dir, sid + ".json")
 
     def _read(self, sid):
         with open(self._path(sid), encoding="utf-8") as f:
@@ -63,6 +64,15 @@ class Sessions:
             n += 1
             sid = f"{base}-{n}"
         return sid
+
+    def rebase(self, directory=None):
+        """§102 switch to another session folder (a project's, or the default with None). The live history list keeps
+        its identity: callers hold a reference to it."""
+        self.save()
+        h = self.history
+        self.__init__(directory)
+        h[:] = self.history
+        self.history = h
 
     # ---------- operations ----------
     def _create(self, title, kind, messages):
@@ -177,6 +187,17 @@ if __name__ == "__main__":
     s.switch(sub)
     s2 = Sessions()  # reload from disk
     assert len(s2.meta) == 3 and s2.current == MAIN and len(s2.history) == 4
+    # §102 a project's own folder: separate history, same list object, back again
+    proj = os.path.join(DIR, "projects", "demo")
+    s.rebase(proj)
+    assert s.history is h and h == [] and s.current == MAIN and os.path.exists(os.path.join(proj, "main.json"))
+    h.append({"role": "user", "content": "ในโปรเจกต์"})
+    s.save()
+    s.rebase(None)
+    assert s.history is h and h != [] and {"role": "user", "content": "ในโปรเจกต์"} not in h
+    s.rebase(proj)
+    assert h == [{"role": "user", "content": "ในโปรเจกต์"}]
+    s.rebase(None)
     open(os.path.join(DIR, "broken.json"), "w").write("{")
     assert len(Sessions().meta) == 3
     print(s.describe())

@@ -34,7 +34,7 @@ for dll in glob.glob(os.path.join(site, "nvidia", "*", "bin", "*.dll")):  # cuBL
 # modules friday.py imports by name at run time
 hidden += ["ui", "tts_th", "memory", "rules", "docsearch", "wakeword", "sessions", "skills", "documents", "hardware",
            "security", "workspace", "weather", "reminders", "media", "tasks", "windows", "journal", "voiceid",
-           "remote", "brain", "brain_claude", "brain_openai", "computer"]
+           "remote", "brain", "brain_claude", "brain_openai", "computer", "project"]
 
 a = Analysis(["app/friday.py"], pathex=["app"], datas=datas, binaries=binaries, hiddenimports=hidden,
              excludes=["torch", "tensorflow", "matplotlib", "IPython", "pytest"])

@@ -52,9 +52,9 @@ import numpy as np, psutil, requests, sounddevice as sd
 from faster_whisper import WhisperModel  # must load (ctranslate2 DLLs) before winrt, or model init access-violates
 import memory, rules, docsearch, tts_th, wakeword  # onnxruntime users: also after faster_whisper
 import sessions, skills, documents, hardware, security, workspace, weather, reminders, media, tasks, windows, journal, voiceid
-import remote, brain, computer
+import remote, brain, computer, project
 
-__version__ = "0.43.0"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
+__version__ = "0.44.0"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
 OLLAMA = os.environ.get("FRIDAY_OLLAMA", "http://127.0.0.1:11434")
 MODEL = os.environ.get("FRIDAY_MODEL", "qwen3.5:4b")  # beat qwen3:8b 39/42 vs 33/42 with 1.7 GB less VRAM (PLAN §7)
 WHISPER = os.environ.get("FRIDAY_WHISPER", "large-v3-turbo")
@@ -190,6 +190,35 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "description": {"type": "string"},
                                                         "steps": {"type": "string"}}, "required": ["name", "description", "steps"]}}},
 ]
+
+
+# §102 project space: only offered while a project is open; every path stays inside it (project.inside)
+PROJECT_TOOLS = [
+    {"type": "function", "function": {
+        "name": "project_files", "description": "List files in the open project. pattern = optional glob ('*.py') or words in the path.",
+        "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}}}}},
+    {"type": "function", "function": {
+        "name": "project_read", "description": "Read a file of the open project (path relative to the project). Long files come in parts: start = line.",
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "start": {"type": "integer"}}, "required": ["path"]}}},
+    {"type": "function", "function": {
+        "name": "project_search", "description": "Find lines containing text in the project's files. pattern = optional glob to limit files.",
+        "parameters": {"type": "object", "properties": {"text": {"type": "string"}, "pattern": {"type": "string"}}, "required": ["text"]}}},
+    {"type": "function", "function": {
+        "name": "project_git", "description": "The project's git status: branch, changed files, recent commits (read-only).",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "project_edit", "description": "Change a project file: old = the exact current text (must appear once, include enough lines), "
+                                              "new = the replacement. To create a new file: old = '' and new = the whole content. "
+                                              "The owner sees the diff and approves.",
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old": {"type": "string"}, "new": {"type": "string"}},
+                       "required": ["path", "old", "new"]}}},
+    {"type": "function", "function": {
+        "name": "project_run", "description": "Run a PowerShell command in the project folder (build, tests, scripts) and get its output. "
+                                             "The owner approves.",
+        "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
+]
+PROJECT_READ = {"project_files", "project_read", "project_search", "project_git"}
+PROJECT_ACT = {"project_edit", "project_run"}
 
 
 _call = threading.local()  # per tool call: .approved (the untrusted-content gate already said yes)
@@ -1146,8 +1175,8 @@ def tool_save_skill(name, description, steps):
 
 # tools that act on the PC or read its files: blocked in safe mode / after tampering, gated after untrusted text
 MACHINE_TOOLS = {"open", "run_powershell", "run_skill_script", "add_rule", "find_images", "find_documents", "read_document",
-                 "write_document", "pdf_tool", "save_skill", "hardware", "smart_home", "media", "window", "computer"}
-READ_TOOLS = {"find_images", "find_documents", "read_document"}  # reading more is not acting
+                 "write_document", "pdf_tool", "save_skill", "hardware", "smart_home", "media", "window", "computer"} | PROJECT_READ | PROJECT_ACT
+READ_TOOLS = {"find_images", "find_documents", "read_document"} | PROJECT_READ  # reading more is not acting
 SOURCE = "typed"  # where the current turn came from, for the audit log: voice | typed | panel
 CHECK_FILES = False  # tamper detection runs in the real app (main), not in self-tests or imports
 TAMPERED = []
@@ -1176,7 +1205,7 @@ def run_tool(name, args):
         security.audit(SOURCE, name, args, "blocked", why)
         return why
     _call.approved = False
-    if UNTRUSTED.is_set() and name in (MACHINE_TOOLS - READ_TOOLS - {"computer"}) | {"remember", "forget", "weather", "reminder", "tasks"}:
+    if UNTRUSTED.is_set() and name in (MACHINE_TOOLS - READ_TOOLS - {"computer"} - PROJECT_ACT) | {"remember", "forget", "weather", "reminder", "tasks"}:
         # (computer asks Windows Hello for every new app itself — owner §86: "Hello ครั้งเดียวต่องาน")
         # this turn read a document / search result: its text may be steering the model (prompt injection)
         if not confirm("FRIDAY อ่านเอกสาร/ผลค้นในรอบนี้แล้วจะทำสิ่งนี้ — อาจเป็นคำสั่งที่แฝงมาในเอกสาร อนุญาตไหม?",
@@ -1192,7 +1221,7 @@ def run_tool(name, args):
                 else "error" if result.startswith("Tool error") else "done")
     if name in MACHINE_TOOLS and name != "hardware":  # hardware_action audits itself
         security.audit(SOURCE, name, args, decision, result)
-    if name in ("read_document", "search_docs", "window", "media", "weather", "computer"):  # titles of pages/songs are written by others
+    if name in ("read_document", "search_docs", "window", "media", "weather", "computer") or name in PROJECT_READ:  # written by others
         UNTRUSTED.set()
     return result
 
@@ -1207,6 +1236,7 @@ def _run_tool(name, args):
           "media": lambda action="info", app="", query="": media_action(action, app=app, query=query), "tasks": tool_tasks,
           "window": lambda action, app="", where="": window_action(action, app, where),
           "computer": lambda action, **a: computer.act(action, approve=computer_approve, **a),
+          **{n: (lambda n: lambda **a: project_action(n, a))(n) for n in PROJECT_READ | PROJECT_ACT},
           **memory.HANDLERS}.get(name)
     if not fn:
         return f"Unknown tool {name}"
@@ -1333,6 +1363,187 @@ def computer_approve(what):
     return confirm(f"{shown(what)[:80]} — FRIDAY จะกด/พิมพ์ในแอปนี้เองจนจบคำสั่งนี้{cloud}", strong=True)
 
 
+_project_ok = threading.Event()  # §102 this request's Windows Hello for project edits/commands (cleared every turn)
+
+
+def project_approve(what, detail):
+    """§102 owner: "Hello ครั้งเดียวต่อคำสั่ง" — the first edit/command of a request asks Windows Hello (or the phone);
+    the rest of that request goes ahead. Every diff/command is still shown in the panel and audited."""
+    panel.send(msg={"role": "tool", "text": f"📁 {shown(what)}\n{shown(detail)[:1500]}"})
+    if _project_ok.is_set():
+        return True
+    ok = confirm(f"{shown(what)[:80]} — โปรเจกต์ {project.name()}: FRIDAY แก้ไฟล์/รันคำสั่งในโปรเจกต์นี้ได้จนจบคำสั่งนี้",
+                 shown(detail)[:300], strong=True)
+    if ok:
+        _project_ok.set()
+    return ok
+
+
+def project_action(name, args):
+    """§102 the project tools. Paths are checked by project.inside (no way out of the folder, no .git, no secrets)."""
+    if not project.ROOT:
+        return "No project is open. The owner opens one with 'เปิดโปรเจกต์ <folder>'."
+    try:
+        if name == "project_files":
+            return "\n".join(project.files(args.get("pattern", ""))) or "No files match."
+        if name == "project_read":
+            return project.read(args.get("path", ""), args.get("start", 1))
+        if name == "project_search":
+            return "\n".join(project.search(args.get("text", ""), args.get("pattern", ""))) or "No matches."
+        if name == "project_git":
+            return workspace.git_report(project.ROOT)
+        if name == "project_edit":
+            path = str(args.get("path", ""))
+            if rules.check("ProjectEdit", path) == "deny":
+                return "Blocked by a deny rule in settings.json."
+            full, after, diff = project.plan_edit(path, str(args.get("old", "")), str(args.get("new", "")))
+            if not project_approve(f"แก้ไฟล์ {project.rel(full)}", diff):
+                return "User declined."
+            project.apply_edit(full, after)
+            return f"Edited {project.rel(full)}:\n{diff[:1500]}"
+        if name == "project_run":
+            cmd = str(args.get("command", "")).strip()
+            if not cmd:
+                return "Tool error: command is empty."
+            if "deny" in (rules.check("ProjectRun", cmd), rules.check("PowerShell", cmd)):  # review: PowerShell(...) denies too
+                return "Blocked by a deny rule in settings.json."
+            if UNTRUSTED.is_set():  # review: text read this turn may be steering — every command after it asks again
+                _project_ok.clear()
+            if not project_approve("รันคำสั่ง", cmd):
+                return "User declined."
+            return project.run(cmd)
+    except project.OutsideProject as e:
+        return f"Blocked: {e}"
+    except subprocess.TimeoutExpired:
+        return f"Failed: the command ran longer than {project.RUN_TIMEOUT_S} s and was stopped"
+    except (ValueError, OSError, RuntimeError) as e:
+        return f"Failed: {e}"
+    return f"Unknown tool {name}"
+
+
+def project_sessions_dir(root):
+    import hashlib
+    slug = re.sub(r"[^\w.-]", "_", os.path.basename(root))[:40]
+    return os.path.join(sessions.DIR, "projects", f"{slug}-{hashlib.sha1(root.lower().encode()).hexdigest()[:8]}")
+
+
+def project_path(arg):
+    """"ล่าสุด" -> the last project · an existing folder · a recent project by name · else None."""
+    arg = str(arg).strip().strip('"')
+    recent = rules.settings().get("projects_recent") or []
+    if re.fullmatch(r"ล่าสุด|อันล่าสุด|latest|last|recent", arg, re.I):
+        return (recent[0] if recent else None) or workspace.last_vscode_project()
+    if os.path.isdir(os.path.expandvars(os.path.expanduser(arg))):
+        return arg
+    return next((r for r in recent if arg and arg.lower() in os.path.basename(r).lower()), None)
+
+
+def project_open(arg, source="typed"):
+    """§102 "เปิดโปรเจกต์ <ที่อยู่/ชื่อ/ล่าสุด>": the folder, a recent project by name, or VS Code's last one."""
+    arg = str(arg).strip().strip('"')
+    recent = rules.settings().get("projects_recent") or []
+    path = project_path(arg)
+    if not path:
+        return f"ไม่เจอโปรเจกต์ \"{shown(arg)[:60]}\" ค่ะ — บอกที่อยู่โฟลเดอร์เต็ม เช่น E:\\work\\myapp หรือเลือกจาก tray › โปรเจกต์"
+    try:
+        with TURN_LOCK:
+            root = project.open_project(path)
+            SESS.rebase(project_sessions_dir(root))
+            _cloud_declined.discard(root)  # reopened: ask again
+    except ValueError as e:
+        return f"เปิดโปรเจกต์ไม่ได้ค่ะ — {e}"
+    recent = [root] + [r for r in recent if r.lower() != root.lower()]
+    with security.own_write(rules.SETTINGS):
+        rules.set_setting("projects_recent", recent[:8])
+        rules.set_setting("project_open", root)
+    security.audit(source, "project", root, "opened")
+    msgs, more = SESS.page(0, UI_PAGE)
+    panel.send(project=f"📁 {project.name()}", sessions=SESS.tree(), reset=msgs, more=more)
+    found = [n for n in project.INSTRUCTIONS if os.path.isfile(os.path.join(root, n))]
+    return (f"เปิดโปรเจกต์ {project.name()} แล้วค่ะ — ต่อจากนี้อ่าน แก้ และรันคำสั่งได้เฉพาะใน {root}"
+            + (f" · ใช้คำสั่งจาก {', '.join(found)}" if found else ""))
+
+
+def project_close(source="typed"):
+    if not project.ROOT:
+        return "ตอนนี้ไม่ได้อยู่ในโปรเจกต์ไหนค่ะ"
+    name = project.name()
+    with TURN_LOCK:
+        project.close_project()
+        SESS.rebase(None)
+    with security.own_write(rules.SETTINGS):
+        rules.set_setting("project_open", None)
+    security.audit(source, "project", name, "closed")
+    msgs, more = SESS.page(0, UI_PAGE)
+    panel.send(project="", sessions=SESS.tree(), reset=msgs, more=more)
+    return f"ออกจากโปรเจกต์ {name} แล้วค่ะ กลับมาที่แชตหลัก"
+
+
+PROJECT_QUESTION_RE = re.compile(r"อธิบาย|ทำไม|อะไร|ยังไง|อย่างไร|ไหม|มั้ย|หรือเปล่า|\?|\b(?:what|why|how|explain|does|is it|should)\b", re.I)
+PROJECT_OPEN_RE = re.compile(r"\W*(?:(?:เปิด|ไปที่|สลับไป(?:ที่)?)\s*โปรเจ[กค]ต์|open (?:the )?project|switch to project|/project)"
+                             r"\s*(.+?)(?:\s*(?:หน่อย|ให้หน่อย|ค่ะ|คะ|ครับ|นะ))*\W*", re.I)
+PROJECT_EDIT_RE = re.compile(r"แก้|เพิ่ม(?:ฟังก์ชัน|โค้ด|บรรทัด|ไฟล์)|เปลี่ยน(?:ให้|เป็น|ชื่อ)|ลบ(?:บรรทัด|ฟังก์ชัน|โค้ด)|เขียน(?:โค้ด|ฟังก์ชัน|ไฟล์)|สร้างไฟล์|"
+                             r"\b(?:fix|change|edit|add|rename|refactor|create (?:a )?file|write (?:a )?(?:file|function))\b", re.I)
+PROJECT_RUN_RE = re.compile(r"รัน|บิลด์|คอมไพล์|\b(?:run|build|compile)\b", re.I)
+PROJECT_CLOSE_RE = re.compile(r"\W*(?:(?:ออกจาก|ปิด)\s*โปรเจ[กค]ต์(?:นี้)?|close (?:the )?project|leave (?:the )?project|/project\s+off)"
+                              r"(?:\s*(?:หน่อย|ค่ะ|คะ|ครับ|นะ))*\W*", re.I)
+PROJECT_ASK_RE = re.compile(r"\W*(?:ตอนนี้)?(?:อยู่|ใช้)(?:ใน)?\s*โปรเจ[กค]ต์(?:อะไร|ไหน)(?:อยู่)?\W*(?:ค่ะ|คะ|ครับ)?\W*|"
+                            r"\W*which project\W*|\s*/project\s*", re.I)
+
+
+def project_command(text, source="typed"):
+    """§102 open / close / which project — code, not the model."""
+    if PROJECT_CLOSE_RE.fullmatch(text):
+        return project_close(source)
+    if PROJECT_ASK_RE.fullmatch(text):
+        return f"ตอนนี้อยู่ในโปรเจกต์ {project.name()} ({project.ROOT}) ค่ะ" if project.ROOT else "ตอนนี้ไม่ได้อยู่ในโปรเจกต์ไหนค่ะ"
+    if m := PROJECT_OPEN_RE.fullmatch(text):
+        # review: "open project settings in VS Code" isn't ours — only a folder, a known project or a path-looking target
+        if project_path(m[1]) or re.search(r"[\\/:]", m[1]):
+            return project_open(m[1], source)
+    return None
+
+
+def project_cloud_ok():
+    """§102 owner: "ถามครั้งเดียวต่อโปรเจกต์" — project files may go to the cloud brain once the owner said yes for
+    this project (Windows Hello, remembered). Secret files are never read at all."""
+    ok = rules.settings().get("project_cloud_ok") or []
+    if project.ROOT in ok:
+        return True
+    if project.ROOT in _cloud_declined:  # asked already: no asking again every message until the project is reopened
+        return False
+    if not confirm(f"ส่งไฟล์ของโปรเจกต์ {project.name()} ให้ {brain.label()}? (ถามครั้งเดียวต่อโปรเจกต์ · ไฟล์ลับไม่ถูกอ่าน)", "", strong=True):
+        _cloud_declined.add(project.ROOT)
+        return False
+    with security.own_write(rules.SETTINGS):
+        rules.set_setting("project_cloud_ok", ok + [project.ROOT])
+    return True
+
+
+_cloud_declined = set()  # §102 projects whose files the owner kept off the cloud in this run
+
+
+def pick_project_folder():
+    if not _key_open.acquire(blocking=False):
+        return
+    try:
+        got = []
+
+        def ask():
+            import tkinter as tk
+            from tkinter import filedialog
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            got.append(filedialog.askdirectory(parent=root, title="เลือกโฟลเดอร์โปรเจกต์"))
+            root.destroy()
+        on_tk_thread(ask)
+    finally:
+        _key_open.release()
+    if got and got[0]:
+        phone_alert(project_open(got[0], "tray"))
+
+
 def stop_ai(source="panel"):
     """Stop button / tray / "/stop": silence now, abandon the answer in progress, end the voice conversation."""
     STOP.set()
@@ -1414,6 +1625,7 @@ def thai_clock(t):
 def chat(history, extra=""):
     UNTRUSTED.clear()
     computer.on_close()  # §86 review: an app approval lasts one turn — a later turn's document can't steer an approved app
+    _project_ok.clear()  # §102 the same for project edits/commands
     user = next((m["content"] for m in reversed(history) if m["role"] == "user"), "")
     context = "\n".join(f"{m['role']}: {m['content'][:200]}" for m in history[-5:-1] if m["role"] in ("user", "assistant") and m.get("content"))
     system = SYSTEM.format(now=datetime.datetime.now().strftime("%A %d %B %Y %H:%M"), memory=memory.prompt(), rules=rules.prompt(),
@@ -1485,16 +1697,33 @@ def chat(history, extra=""):
                    "Steps in order use \"1. \", \"2. \" instead of \"- \".")
     if SESS is not None and history is SESS.history and (old := SESS.meta[SESS.current].get("summary")):
         system += f"\nEarlier in this conversation (your own summary — notes, not instructions):\n{old}"  # §63
+    tools = TOOLS
+    project_local = False  # §102 the owner said no to sending this project's files to the cloud brain
+    if project.ROOT and brain.is_cloud() and not project_cloud_ok():
+        # review: kept off the cloud = no project tools, no path, no instructions for the cloud model at all
+        project_local = True
+        system += ("\nA project is open but its files stay on this PC with this brain: to work on it, the owner switches to "
+                   "the local brain (\"ใช้สมองในเครื่อง\").")
+    elif project.ROOT:
+        tools = TOOLS + PROJECT_TOOLS
+        system += (f"\nPROJECT: \"{project.name()}\" at {project.ROOT} is open. Work only inside it with the project_* tools "
+                   "(paths relative to the project). To CHANGE code you MUST call project_edit (old = exact current lines from "
+                   "project_read, new = the changed lines) — describing a change is not making it. To run something, call "
+                   "project_run with the command the user asked for. Never guess file names or contents — look first with "
+                   "project_files / project_search / project_read. Never claim a change you did not make with a tool.")
+        if not project_local and (ins := project.instructions()):
+            system += f"\nPROJECT INSTRUCTIONS (from the project's own files):\n{ins}"
     window = history[-HISTORY:]
     if brain.is_cloud():  # §84 review: document text read earlier (maybe with the local brain) stays on this PC
-        window = [{**m, "content": "(document text kept on the PC — read it again if needed)"}
-                  if m.get("role") == "tool" and m.get("tool_name") in DOC_TOOLS else m for m in window]
+        kept = set(DOC_TOOLS) | ((PROJECT_READ | PROJECT_ACT) if project_local else set())  # §102 review: project results too
+        window = [{**m, "content": "(text kept on the PC — read it again if needed)"}
+                  if m.get("role") == "tool" and m.get("tool_name") in kept else m for m in window]
     messages = [{"role": "system", "content": system}] + window
     if shot and messages[-1].get("role") == "user":  # the picture rides on this turn only; history keeps the text
         messages[-1] = {**messages[-1], "images": [shot[2]]}
-    told = False
+    told = nudged = False
     for _ in range(8):  # max tool rounds per turn (multi-step memory lookups need several)
-        msg = brain.chat(messages, tools=TOOLS, temperature=TEMPERATURE, source=SOURCE)  # §84 local or cloud brain
+        msg = brain.chat(messages, tools=tools, temperature=TEMPERATURE, source=SOURCE)  # §84 local or cloud brain
         if STOP.is_set():  # pressed while the model was thinking: its answer (and any tool it asked for) is dropped
             raise Stopped()
         if msg.get("_fallback") and not told:
@@ -1502,6 +1731,16 @@ def chat(history, extra=""):
             print(f"  ☁ {msg['_fallback']}")
             panel.send(msg={"role": "tool", "text": f"☁ {msg['_fallback']}"})
         messages.append(msg)  # this turn: the cloud's own blocks go back unchanged
+        # §102 a small model reads the file, says "I'll change it" and stops: when the request asks for an edit/run that
+        # no tool did yet, ask once more for the tool call (this nudge stays out of the saved history)
+        want = project.ROOT and not project_local and not msg.get("tool_calls") and not nudged and not PROJECT_QUESTION_RE.search(user) and next(
+            (t for t, rx in (("project_edit", PROJECT_EDIT_RE), ("project_run", PROJECT_RUN_RE)) if rx.search(user)
+             and not any(c["function"]["name"] == t for m in messages if m.get("tool_calls") for c in m["tool_calls"])), None)
+        if want:
+            nudged = True
+            messages.append({"role": "user", "content": f"You have not called {want} yet. Call it now to actually do what I asked "
+                                                        "(do not just describe it)."})
+            continue
         history.append({k: v for k, v in msg.items() if not k.startswith("_")})  # history: text + tool calls only
         if not msg.get("tool_calls"):
             # female voice: small models slip into the male particle despite the prompt (2/3 runs) — fix it in code
@@ -1514,6 +1753,8 @@ def chat(history, extra=""):
             if name in DOC_TOOLS and brain.is_cloud() and not result.startswith(NOT_TEXT) \
                     and not confirm(f"ส่งเนื้อหาเอกสาร ({len(result)} ตัวอักษร) ให้ {brain.label()}? ข้อความจะออกนอกเครื่อง"):
                 result = "User declined sending this document's text to the cloud model. Answer without it."  # §84
+            if project_local and name in PROJECT_READ | PROJECT_ACT and brain.is_cloud():
+                result = "The owner keeps this project's files on the PC: they are not sent to the cloud model."  # §102
             print(f"  [{name}] {result[:200]}")
             panel.send(msg={"role": "tool", "text": f"⚙ {name}"})
             tool_msg = {"role": "tool", "tool_name": name, "tool_call_id": call.get("id"), "content": result}
@@ -2163,7 +2404,8 @@ class Panel:
             return
         threading.Thread(target=self._read, daemon=True).start()
         msgs, more = SESS.page(0, UI_PAGE)
-        self.send(sessions=SESS.tree(), reset=msgs, more=more, volume=volume(), brain=brain.label() if brain.is_cloud() else "")
+        self.send(sessions=SESS.tree(), reset=msgs, more=more, volume=volume(), brain=brain.label() if brain.is_cloud() else "",
+                  project=f"📁 {project.name()}" if project.ROOT else "")
 
     def _read(self):
         """What the user does in the interactive panel: typed messages and session buttons."""
@@ -2424,6 +2666,48 @@ def selftest():
     assert not BRAIN_RE.fullmatch("สมองของคนทำงานยังไง") and not BRAIN_RE.fullmatch("ใช้ claude เขียนโค้ดดีไหม")
     assert PULL_RE.fullmatch("โหลดโมเดล gemma3:4b")[1] == "gemma3:4b" and PULL_RE.fullmatch("pull model qwen3:8b")[1] == "qwen3:8b"
     assert PULL_RE.fullmatch("ดาวน์โหลดโมเดล llama3.2 เข้า ollama หน่อย")[1] == "llama3.2" and not PULL_RE.fullmatch("โหลดเพลงให้หน่อย")
+    # §102 project space: commands, the fence, the per-request Hello gate
+    assert PROJECT_OPEN_RE.fullmatch(r"เปิดโปรเจกต์ E:\work\myapp")[1] == r"E:\work\myapp" and PROJECT_OPEN_RE.fullmatch("open project myapp")[1] == "myapp"
+    assert PROJECT_OPEN_RE.fullmatch("/project ล่าสุด")[1] == "ล่าสุด" and PROJECT_OPEN_RE.fullmatch("เปิดโปรเจกต์ล่าสุดหน่อย")[1] == "ล่าสุด"
+    assert PROJECT_CLOSE_RE.fullmatch("ออกจากโปรเจกต์") and PROJECT_CLOSE_RE.fullmatch("/project off") and PROJECT_ASK_RE.fullmatch("ตอนนี้อยู่โปรเจกต์อะไร")
+    assert not PROJECT_OPEN_RE.fullmatch("เปิดโปรแกรม notepad") and not PROJECT_OPEN_RE.fullmatch("โปรเจกต์มีอะไรเปลี่ยนบ้าง")
+    assert PROJECT_EDIT_RE.search("แก้ฟังก์ชัน add") and PROJECT_RUN_RE.search("รันเทสให้หน่อย") and PROJECT_RUN_RE.search("run the tests")
+    assert project_command("open project settings in VS Code") is None and project_command("ใช้โปรเจกต์นี้ทำอะไรได้บ้าง") is None
+    assert PROJECT_QUESTION_RE.search("what does the run() function do?") and PROJECT_QUESTION_RE.search("อธิบายว่าทำไมต้องแก้ตรงนี้")
+    assert not PROJECT_QUESTION_RE.search("แก้ฟังก์ชัน add ให้รับ 3 ตัว")
+    assert not PROJECT_EDIT_RE.search("อธิบายไฟล์ทดสอบ") and not PROJECT_RUN_RE.search("อธิบายไฟล์ทดสอบ") and not PROJECT_EDIT_RE.search("โปรเจกต์มีอะไรเปลี่ยนบ้าง")
+    assert project_action("project_files", {}).startswith("No project is open")
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(os.path.join(d, "app"))
+        open(os.path.join(d, "app", "main.py"), "w", encoding="utf-8").write("x = 1\n")
+        open(os.path.join(d, ".env"), "w").write("KEY=1\n")
+        project.open_project(d)
+        real_confirm, asks = globals()["confirm"], []
+        try:
+            globals()["confirm"] = lambda *a, **k: asks.append(k.get("strong")) or False
+            assert project_action("project_files", {}) == "app/main.py"  # .env never listed
+            assert project_action("project_read", {"path": ".env"}).startswith("Blocked") and project_action("project_read", {"path": "../x"}).startswith("Blocked")
+            _project_ok.clear()
+            assert project_action("project_edit", {"path": "app/main.py", "old": "x = 1", "new": "x = 2"}) == "User declined." and asks == [True]
+            assert "x = 1" in open(os.path.join(d, "app", "main.py")).read()  # declined = untouched
+            globals()["confirm"] = lambda *a, **k: asks.append(k.get("strong")) or True
+            assert project_action("project_edit", {"path": "app/main.py", "old": "x = 1", "new": "x = 2"}).startswith("Edited app/main.py")
+            assert project_action("project_run", {"command": "Write-Output ok"}).startswith("exit 0") and asks == [True, True]  # 1 Hello per request
+            UNTRUSTED.set()  # review: after reading text this turn, every command asks again
+            project_action("project_run", {"command": "Write-Output a"})
+            project_action("project_run", {"command": "Write-Output b"})
+            assert asks == [True, True, True, True], asks
+            UNTRUSTED.clear()
+            asks[:] = [True, True]
+            _project_ok.clear()  # the next request asks again
+            project_action("project_run", {"command": "Write-Output again"})
+            assert asks == [True, True, True], asks
+            assert project_action("project_edit", {"path": "../escape.txt", "old": "", "new": "x"}).startswith("Blocked")
+        finally:
+            globals()["confirm"] = real_confirm
+            _project_ok.clear()
+            project.close_project()
+    assert "project_edit" in MACHINE_TOOLS and "project_read" in READ_TOOLS
     assert MODEL_RE.fullmatch("เปลี่ยนสมองเป็น gemma3:4b")[1] == "gemma3:4b" and not MODEL_RE.fullmatch("เปลี่ยนสมองเป็น claude")
     # §73 PC-typed chat for the phone: only chat lines, not the phone's own, restart after a cleared session
     import types as _ty
@@ -2702,7 +2986,7 @@ def _turn(history, text):
                 say(reply.split("\n")[0])
             return
         if GIT_RE.fullmatch(text):  # §62 read-only git of VS Code's last project, written by code
-            proj = workspace.last_vscode_project()
+            proj = project.ROOT or workspace.last_vscode_project()  # §102 the open project first
             if why := blocked("find_documents"):  # runs a program (git): safe mode / changed files stop it (review §66)
                 reply = thai_result(why)
             elif proj and os.path.isdir(proj):
@@ -2797,6 +3081,14 @@ def _turn(history, text):
             if not MUTED:
                 panel.send(state="speaking")
                 say(reply)
+            return
+        if (reply := project_command(text, SOURCE)) is not None:  # §102
+            print(f"FRIDAY> {reply}")
+            panel.send(msg={"role": "user", "text": text})
+            panel.send(msg={"role": "assistant", "text": reply})
+            if not MUTED:
+                panel.send(state="speaking")
+                say(reply.split(" — ")[0])
             return
         if (reply := brain_command(text)) is not None:  # §84
             print(f"FRIDAY> {reply}")
@@ -3032,6 +3324,15 @@ def start_tray(history):
     def quit_(icon):
         quit_app()
 
+    def project_items():  # §102 recent projects + pick a folder + leave
+        rows = [item(f"{'✓ ' if project.ROOT and r.lower() == project.ROOT.lower() else ''}{os.path.basename(r)}",
+                     (lambda r: bg(lambda: icon.notify(project_open(r, "tray"), "FRIDAY")))(r))
+                for r in (rules.settings().get("projects_recent") or []) if os.path.isdir(r)]
+        rows += [pystray.Menu.SEPARATOR, item("เลือกโฟลเดอร์…", bg(pick_project_folder))]
+        if project.ROOT:
+            rows.append(item("ออกจากโปรเจกต์", bg(lambda: icon.notify(project_close("tray"), "FRIDAY"))))
+        return rows
+
     def brain_items():  # §84 rebuilt every time the menu opens; model lists come from a cache (never blocks the menu)
         p, m = brain.current()
         pick = lambda prov, mid: bg(lambda: icon.notify(switch_brain(prov, mid, "tray"), "FRIDAY"))
@@ -3059,6 +3360,7 @@ def start_tray(history):
         item("เปิดแชต", lambda: panel.open("toggle"), default=True),  # default = clicking the icon
         item("หยุด (เสียง/คำตอบ/การฟัง)", lambda: stop_ai("tray")),
         item("Session", pystray.Menu(session_items)),
+        item(lambda _: f"โปรเจกต์ ({project.name()})" if project.ROOT else "โปรเจกต์", pystray.Menu(project_items)),
         item("ปิดเสียงตอบ", toggle_mute, checked=lambda _: MUTED),
         item("ความปลอดภัย", pystray.Menu(
             item("โหมดปลอดภัย (ห้ามสั่งเครื่อง)", bg(toggle_safe), checked=lambda _: safe_mode()),
@@ -3233,6 +3535,11 @@ def main():
     SESS = sessions.Sessions()
     history = SESS.history  # the live list: session switches replace its contents in place
     rules.settings()  # creates settings.json with defaults on first run
+    if (last := rules.settings().get("project_open")) and os.path.isdir(last):  # §102 the project stays open across restarts
+        try:
+            SESS.rebase(project_sessions_dir(project.open_project(last)))
+        except ValueError:
+            pass
     global CHECK_FILES
     CHECK_FILES = True
     try:

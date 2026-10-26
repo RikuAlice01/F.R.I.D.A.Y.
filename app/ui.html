@@ -29,6 +29,9 @@
   /* §84 shown only while a cloud brain thinks: the owner always sees that the conversation leaves the PC */
   .brain { font-size: 11px; color: var(--cyan); margin-top: -8px; min-height: 0; }
   .brain:empty { display: none; }
+  /* §102 the open project folder */
+  .project { font-size: 11px; color: var(--dim); margin-top: -8px; }
+  .project:empty { display: none; }
 
   /* ---------- orb: Siri-style fluid core + F.R.I.D.A.Y. HUD rings, drawn on a canvas (§35) ---------- */
   .orb-wrap { --size: min(30vw, 130px); width: var(--size); height: var(--size); }
@@ -134,6 +137,7 @@
   <header>
     <div class="brand">F.R.I.D.A.Y.</div>
     <div class="brain" id="brain"></div>
+    <div class="project" id="project"></div>
     <div class="orb-wrap" aria-hidden="true"><canvas id="orb"></canvas></div>
     <div class="status" id="status" role="status" aria-live="polite"></div>
   </header>
@@ -541,6 +545,7 @@
         chat.scrollTop += chat.scrollHeight - h; loading = false;
       }
       if ("brain" in e) document.getElementById("brain").textContent = e.brain || "";
+      if ("project" in e) document.getElementById("project").textContent = e.project || "";
       if (e.state) setState(e.state);
       if ("level" in e) Orb.level(e.level);
       if ("visible" in e) { Orb.visible(e.visible); Glitter.visible(e.visible); }
