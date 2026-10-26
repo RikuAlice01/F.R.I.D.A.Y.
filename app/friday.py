@@ -52,9 +52,9 @@ import numpy as np, psutil, requests, sounddevice as sd
 from faster_whisper import WhisperModel  # must load (ctranslate2 DLLs) before winrt, or model init access-violates
 import memory, rules, docsearch, tts_th, wakeword  # onnxruntime users: also after faster_whisper
 import sessions, skills, documents, hardware, security, workspace, weather, reminders, media, tasks, windows, journal, voiceid
-import remote, brain, computer, project
+import remote, brain, computer, project, categories
 
-__version__ = "0.44.0"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
+__version__ = "0.45.0"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
 OLLAMA = os.environ.get("FRIDAY_OLLAMA", "http://127.0.0.1:11434")
 MODEL = os.environ.get("FRIDAY_MODEL", "qwen3.5:4b")  # beat qwen3:8b 39/42 vs 33/42 with 1.7 GB less VRAM (PLAN §7)
 WHISPER = os.environ.get("FRIDAY_WHISPER", "large-v3-turbo")
@@ -1448,7 +1448,8 @@ def project_open(arg, source="typed"):
     try:
         with TURN_LOCK:
             root = project.open_project(path)
-            SESS.rebase(project_sessions_dir(root))
+            if SESS is not None:  # headless (self-test): no conversation to switch
+                SESS.rebase(project_sessions_dir(root))
             _cloud_declined.discard(root)  # reopened: ask again
     except ValueError as e:
         return f"เปิดโปรเจกต์ไม่ได้ค่ะ — {e}"
@@ -1457,8 +1458,9 @@ def project_open(arg, source="typed"):
         rules.set_setting("projects_recent", recent[:8])
         rules.set_setting("project_open", root)
     security.audit(source, "project", root, "opened")
-    msgs, more = SESS.page(0, UI_PAGE)
-    panel.send(project=f"📁 {project.name()}", sessions=SESS.tree(), reset=msgs, more=more)
+    if SESS is not None:
+        msgs, more = SESS.page(0, UI_PAGE)
+        panel.send(project=project_badge(), sessions=SESS.tree(), reset=msgs, more=more)
     found = [n for n in project.INSTRUCTIONS if os.path.isfile(os.path.join(root, n))]
     return (f"เปิดโปรเจกต์ {project.name()} แล้วค่ะ — ต่อจากนี้อ่าน แก้ และรันคำสั่งได้เฉพาะใน {root}"
             + (f" · ใช้คำสั่งจาก {', '.join(found)}" if found else ""))
@@ -1481,9 +1483,9 @@ def project_close(source="typed"):
 
 PROJECT_QUESTION_RE = re.compile(r"อธิบาย|ทำไม|อะไร|ยังไง|อย่างไร|ไหม|มั้ย|หรือเปล่า|\?|\b(?:what|why|how|explain|does|is it|should)\b", re.I)
 PROJECT_OPEN_RE = re.compile(r"\W*(?:(?:เปิด|ไปที่|สลับไป(?:ที่)?)\s*โปรเจ[กค]ต์|open (?:the )?project|switch to project|/project)"
-                             r"\s*(.+?)(?:\s*(?:หน่อย|ให้หน่อย|ค่ะ|คะ|ครับ|นะ))*\W*", re.I)
-PROJECT_EDIT_RE = re.compile(r"แก้|เพิ่ม(?:ฟังก์ชัน|โค้ด|บรรทัด|ไฟล์)|เปลี่ยน(?:ให้|เป็น|ชื่อ)|ลบ(?:บรรทัด|ฟังก์ชัน|โค้ด)|เขียน(?:โค้ด|ฟังก์ชัน|ไฟล์)|สร้างไฟล์|"
-                             r"\b(?:fix|change|edit|add|rename|refactor|create (?:a )?file|write (?:a )?(?:file|function))\b", re.I)
+                             r"\s*(.+?)(?:\s*(?:หน่อย|ให้หน่อย|ค่ะ|คะ|ครับ|นะ))*[\s.!?]*", re.I)  # Thai marks are \W
+PROJECT_EDIT_RE = re.compile(r"แก้|เพิ่ม(?:ฟังก์ชัน|โค้ด|บรรทัด|ไฟล์)|เปลี่ยน(?:ให้|เป็น|ชื่อ)|ลบ(?:บรรทัด|ฟังก์ชัน|โค้ด)|เขียน|ร่าง|วางแผน|สร้างไฟล์|"
+                             r"\b(?:fix|change|edit|add|rename|refactor|create (?:a )?file|write|draft|plan)\b", re.I)  # §103 writing categories
 PROJECT_RUN_RE = re.compile(r"รัน|บิลด์|คอมไพล์|\b(?:run|build|compile)\b", re.I)
 PROJECT_CLOSE_RE = re.compile(r"\W*(?:(?:ออกจาก|ปิด)\s*โปรเจ[กค]ต์(?:นี้)?|close (?:the )?project|leave (?:the )?project|/project\s+off)"
                               r"(?:\s*(?:หน่อย|ค่ะ|คะ|ครับ|นะ))*\W*", re.I)
@@ -1504,6 +1506,143 @@ def project_command(text, source="typed"):
     return None
 
 
+# ---------- §103 project categories (Gems-like rule sets in the project's FRIDAY.md) ----------
+PROJECTS_HOME = os.path.join(documents.OUT_DIR, "Projects")  # owner: "สร้างใน Documents\\FRIDAY\\Projects"
+
+
+def custom_categories():
+    return rules.settings().get("project_categories") or {}
+
+
+def project_category():
+    """The open project's category key (from its FRIDAY.md), or None."""
+    try:
+        f = project.inside("FRIDAY.md")
+        return categories.current(project._text(f)) if os.path.isfile(f) else None
+    except (project.OutsideProject, ValueError, OSError):
+        return None
+
+
+def project_badge():
+    if not project.ROOT:
+        return ""
+    k = project_category()
+    cats = categories.all_categories(custom_categories())
+    return f"📁 {project.name()}" + (f" · {cats[k][0]}" if k in cats else "")
+
+
+def category_list():
+    cats = categories.all_categories(custom_categories())
+    return "หมวดที่มี: " + " · ".join(v[0] for v in cats.values()) + " — หรือสร้างเองด้วย \"สร้างหมวดใหม่ ชื่อ … กฎ …\""
+
+
+def set_project_category(name, source="typed"):
+    """§103 "ตั้งหมวดโปรเจกต์เป็นนิยาย": the category's rules go into the project's FRIDAY.md (a managed block — the
+    owner's own text stays). Writing a file = Windows Hello."""
+    if not project.ROOT:
+        return "เปิดโปรเจกต์ก่อนนะคะ (\"เปิดโปรเจกต์ …\") หรือสร้างใหม่ด้วย \"สร้างโปรเจกต์นิยาย ชื่อ …\""
+    key = categories.find(name, custom_categories())
+    if not key:
+        return f"ไม่รู้จักหมวด \"{shown(str(name))[:40]}\" ค่ะ — {category_list()}"
+    th = categories.all_categories(custom_categories())[key][0]
+    try:
+        full = project.inside("FRIDAY.md")
+        old, enc = project._decode(full) if os.path.isfile(full) else ("", "utf-8")
+    except (project.OutsideProject, ValueError, OSError) as e:
+        return f"ตั้งหมวดไม่ได้ค่ะ — {e}"
+    new = categories.with_category(old, key, custom_categories())
+    if not confirm(f"ตั้งหมวด \"{th}\" ให้โปรเจกต์ {project.name()}? (เขียนกฎลง FRIDAY.md · ข้อความเดิมของคุณอยู่ครบ)", "", strong=True):
+        return "ไม่ได้ตั้งหมวดค่ะ"
+    project.apply_edit(full, (new, enc))
+    security.audit(source, "project_category", f"{project.name()}:{key}", "done")
+    panel.send(project=project_badge())
+    return f"ตั้งหมวด {th} ให้โปรเจกต์ {project.name()} แล้วค่ะ — กฎอยู่ใน FRIDAY.md แก้เพิ่มเองได้"
+
+
+def create_project(name, category, source="typed"):
+    """§103 "สร้างโปรเจกต์นิยาย ชื่อ ดาวพระศุกร์": a new folder in Documents\\FRIDAY\\Projects with FRIDAY.md, then open it."""
+    folder = re.sub(r'[\\/:*?"<>|]+', " ", str(name)).strip().strip(".")[:60]
+    if not folder:
+        return "บอกชื่อโปรเจกต์ด้วยนะคะ เช่น \"สร้างโปรเจกต์นิยาย ชื่อ ดาวพระศุกร์\""
+    key = categories.find(category, custom_categories()) if str(category).strip() else None
+    if not key:
+        return f"โปรเจกต์ \"{shown(folder)}\" เป็นหมวดไหนคะ — {category_list()}"
+    path = os.path.join(PROJECTS_HOME, folder)
+    if os.path.exists(path):
+        return f"มีโปรเจกต์ชื่อ {folder} อยู่แล้วค่ะ — พูดว่า \"เปิดโปรเจกต์ {folder}\""
+    th = categories.all_categories(custom_categories())[key][0]
+    if not confirm(f"สร้างโปรเจกต์ \"{shown(folder)}\" หมวด {th} ใน Documents\\FRIDAY\\Projects?", "", strong=True):
+        return "ไม่ได้สร้างค่ะ"
+    try:
+        os.makedirs(path)
+        with open(os.path.join(path, "FRIDAY.md"), "w", encoding="utf-8") as f:
+            f.write(categories.with_category(f"# {folder}\n", key, custom_categories()))
+    except OSError as e:  # a reserved name (CON, NUL …), no permission, disk full
+        return f"สร้างโฟลเดอร์ \"{shown(folder)}\" ไม่ได้ค่ะ — {e.strerror or e}"
+    security.audit(source, "project_create", path, "done", key)
+    return project_open(path, source).replace("เปิดโปรเจกต์", f"สร้างโปรเจกต์ {th}", 1)
+
+
+def create_category(name, rule_text, source="typed"):
+    """§103 the owner's own category: name + rules, reused by every project. Saved after Windows Hello (like add_rule)."""
+    name, rule_text = " ".join(str(name).split())[:40], str(rule_text).strip()[:categories.LIMIT]
+    key = categories.custom_key(name)
+    if not key or not rule_text:
+        return "บอกชื่อหมวดและกฎด้วยนะคะ เช่น \"สร้างหมวดใหม่ ชื่อ บทพากย์ YouTube กฎ เขียนสั้น กระชับ ภาษาพูด\""
+    if not confirm(f"สร้างหมวด \"{shown(name)}\"?", shown(rule_text)[:300], strong=True):
+        return "ไม่ได้สร้างหมวดค่ะ"
+    cats = dict(custom_categories())
+    cats[key] = {"name": name, "rules": rule_text}
+    with security.own_write(rules.SETTINGS):
+        rules.set_setting("project_categories", cats)
+    security.audit(source, "category_create", name, "done")
+    return f"สร้างหมวด {name} แล้วค่ะ — ใช้กับโปรเจกต์ไหนก็ได้: \"ตั้งหมวดโปรเจกต์เป็น {name}\""
+
+
+def delete_category(name, source="typed"):
+    key = next((k for k, v in custom_categories().items() if v.get("name", "").lower() == str(name).strip().lower()), None)
+    if not key:
+        return f"ไม่มีหมวดที่สร้างเองชื่อ \"{shown(str(name))[:40]}\" ค่ะ (หมวดตั้งต้นลบไม่ได้)"
+    if not confirm(f"ลบหมวด \"{shown(str(name))}\"? (FRIDAY.md ที่ใช้หมวดนี้อยู่แล้วไม่ถูกแตะ)", "", strong=True):
+        return "ไม่ได้ลบค่ะ"
+    cats = {k: v for k, v in custom_categories().items() if k != key}
+    with security.own_write(rules.SETTINGS):
+        rules.set_setting("project_categories", cats)
+    security.audit(source, "category_delete", name, "done")
+    return f"ลบหมวด {name} แล้วค่ะ"
+
+
+_POL = r"(?:\s*(?:หน่อย|ให้หน่อย|ด้วย|ค่ะ|คะ|ครับ|นะ|please))*[\s.!?]*"  # not \W*: Thai marks (์ ั) are \W
+CREATE_PROJECT_RE = re.compile(r"\W*(?:สร้าง|เริ่ม)\s*โปรเจ[กค]ต์(?P<th>.*)|\W*(?:create|start|new)\b"
+                               r"(?P<en>(?:\s+(?!in\b|inside\b|for\b|to\b|of\b|on\b)\S+){0,3}?\s+project\b.*)", re.I | re.S)  # not "create a file in this project"
+SETCAT_RE = re.compile(r"\W*(?:ตั้ง|เปลี่ยน|ใช้)\s*หมวด(?:หมู่)?(?:ของ)?(?:โปรเจ[กค]ต์)?(?:นี้)?\s*(?:เป็น|ให้เป็น)?\s*(.+?)" + _POL
+                       + r"|\W*set (?:the )?(?:project )?category (?:to )?(.+?)\W*", re.I)
+LISTCAT_RE = re.compile(r"\W*(?:มี)?หมวด(?:หมู่)?(?:โปรเจ[กค]ต์)?(?:อะไร)?บ้าง\W*(?:คะ|ครับ)?\W*|\s*/categories\s*|\W*(?:list|which) (?:project )?categories\W*", re.I)
+NEWCAT_RE = re.compile(r"\W*(?:สร้าง|เพิ่ม)\s*หมวด(?:หมู่)?(?:ใหม่)?\s*(?:ชื่อ)?\s*(.+?)\s*(?:กฎ|กฏ|rules?)\s*[:：]?\s*(.+)"
+                       r"|\W*(?:create|add) (?:a )?(?:new )?category\s*(?:called|named)?\s*(.+?)\s*rules?\s*:?\s*(.+)", re.I | re.S)
+DELCAT_RE = re.compile(r"\W*ลบหมวด(?:หมู่)?\s*(.+?)" + _POL + r"|\W*delete (?:the )?category\s*(.+?)\W*", re.I)
+
+
+def category_command(text, source="typed"):
+    """§103 create a project (with a category) · set / list / create / delete categories — code, not the model."""
+    if m := NEWCAT_RE.fullmatch(text):
+        return create_category(m[1] or m[3], m[2] or m[4], source)
+    if LISTCAT_RE.fullmatch(text):
+        return category_list()
+    if m := DELCAT_RE.fullmatch(text):
+        return delete_category(m[1] or m[2], source)
+    if m := SETCAT_RE.fullmatch(text):
+        return set_project_category(m[1] or m[2], source)
+    if m := CREATE_PROJECT_RE.fullmatch(text):
+        rest = (m["th"] if m["th"] is not None else m["en"]).strip()
+        n = re.search(r"(?:ชื่อ|called|named)\s*(.+?)(?=\s*(?:หมวด|category)|\s*(?:หน่อย|ค่ะ|คะ|ครับ|นะ)*[\s.!?]*$)", rest, re.I)
+        c = re.search(r"(?:หมวด|category)\s*(.+?)\s*(?:หน่อย|ค่ะ|คะ|ครับ|นะ)*[\s.!?]*$", rest, re.I)
+        before = re.split(r"ชื่อ|called|named", rest, maxsplit=1, flags=re.I)[0]
+        cat = c[1] if c else re.sub(r"\b(?:a|an|new|project)\b|ใหม่", " ", before, flags=re.I).strip()
+        return create_project(n[1] if n else "", cat, source)
+    return None
+
+
 def project_cloud_ok():
     """§102 owner: "ถามครั้งเดียวต่อโปรเจกต์" — project files may go to the cloud brain once the owner said yes for
     this project (Windows Hello, remembered). Secret files are never read at all."""
@@ -1521,6 +1660,50 @@ def project_cloud_ok():
 
 
 _cloud_declined = set()  # §102 projects whose files the owner kept off the cloud in this run
+
+
+def new_project_dialog():
+    """§103 tray › โปรเจกต์ › สร้างโปรเจกต์ใหม่…: a name and a category, in one small window."""
+    if not _key_open.acquire(blocking=False):
+        return
+    got = []
+    try:
+        def ask():
+            import tkinter as tk
+            cats = categories.all_categories(custom_categories())
+            root = tk.Tk()
+            root.overrideredirect(True)
+            root.attributes("-topmost", True)
+            bg_, fg, font = "#16181f", "#e8e8ee", ("Leelawadee UI", 10)
+            root.configure(bg=bg_, highlightthickness=1, highlightbackground="#2c3040")
+            tk.Label(root, text="📁 สร้างโปรเจกต์ใหม่", bg=bg_, fg=fg, font=(font[0], 12, "bold")).pack(padx=16, pady=(12, 4))
+            tk.Label(root, text="ชื่อโปรเจกต์ (สร้างใน Documents\\FRIDAY\\Projects)", bg=bg_, fg="#8a8fa3", font=font).pack(padx=16)
+            entry = tk.Entry(root, width=40, font=font, bg="#22252f", fg=fg, insertbackground=fg, relief="flat")
+            entry.pack(padx=16, pady=8, ipady=4)
+            tk.Label(root, text="หมวด", bg=bg_, fg="#8a8fa3", font=font).pack(padx=16)
+            box = tk.Listbox(root, height=min(10, len(cats)), font=font, bg="#22252f", fg=fg, selectbackground="#3ee6ff",
+                             selectforeground="#0b0c11", relief="flat", exportselection=False)
+            for v in cats.values():
+                box.insert("end", v[0])
+            box.selection_set(0)
+            box.pack(padx=16, pady=(4, 8), fill="x")
+            row = tk.Frame(root, bg=bg_)
+            row.pack(pady=(0, 12))
+            keys = list(cats)
+            done = lambda: (got.append((entry.get().strip(), keys[box.curselection()[0]] if box.curselection() else keys[0])), root.destroy())
+            tk.Button(row, text="สร้าง", command=done, bg="#3ee6ff", fg="#0b0c11", relief="flat", font=font, width=10).pack(side="left", padx=4)
+            tk.Button(row, text="ยกเลิก", command=root.destroy, bg="#2c3040", fg=fg, relief="flat", font=font, width=10).pack(side="left", padx=4)
+            entry.bind("<Return>", lambda e: done())
+            root.bind("<Escape>", lambda e: root.destroy())
+            root.update_idletasks()
+            root.geometry(f"+{(root.winfo_screenwidth() - root.winfo_width()) // 2}+{(root.winfo_screenheight() - root.winfo_height()) // 2}")
+            root.after(50, entry.focus_force)
+            root.mainloop()
+        on_tk_thread(ask)
+    finally:
+        _key_open.release()
+    if got and got[0][0]:
+        phone_alert(create_project(got[0][0], got[0][1], "tray"))
 
 
 def pick_project_folder():
@@ -2405,7 +2588,7 @@ class Panel:
         threading.Thread(target=self._read, daemon=True).start()
         msgs, more = SESS.page(0, UI_PAGE)
         self.send(sessions=SESS.tree(), reset=msgs, more=more, volume=volume(), brain=brain.label() if brain.is_cloud() else "",
-                  project=f"📁 {project.name()}" if project.ROOT else "")
+                  project=project_badge())
 
     def _read(self):
         """What the user does in the interactive panel: typed messages and session buttons."""
@@ -2668,10 +2851,40 @@ def selftest():
     assert PULL_RE.fullmatch("ดาวน์โหลดโมเดล llama3.2 เข้า ollama หน่อย")[1] == "llama3.2" and not PULL_RE.fullmatch("โหลดเพลงให้หน่อย")
     # §102 project space: commands, the fence, the per-request Hello gate
     assert PROJECT_OPEN_RE.fullmatch(r"เปิดโปรเจกต์ E:\work\myapp")[1] == r"E:\work\myapp" and PROJECT_OPEN_RE.fullmatch("open project myapp")[1] == "myapp"
+    assert PROJECT_OPEN_RE.fullmatch("เปิดโปรเจกต์ ซีรีส์")[1] == "ซีรีส์"  # a name ending in a Thai mark keeps it
     assert PROJECT_OPEN_RE.fullmatch("/project ล่าสุด")[1] == "ล่าสุด" and PROJECT_OPEN_RE.fullmatch("เปิดโปรเจกต์ล่าสุดหน่อย")[1] == "ล่าสุด"
     assert PROJECT_CLOSE_RE.fullmatch("ออกจากโปรเจกต์") and PROJECT_CLOSE_RE.fullmatch("/project off") and PROJECT_ASK_RE.fullmatch("ตอนนี้อยู่โปรเจกต์อะไร")
     assert not PROJECT_OPEN_RE.fullmatch("เปิดโปรแกรม notepad") and not PROJECT_OPEN_RE.fullmatch("โปรเจกต์มีอะไรเปลี่ยนบ้าง")
     assert PROJECT_EDIT_RE.search("แก้ฟังก์ชัน add") and PROJECT_RUN_RE.search("รันเทสให้หน่อย") and PROJECT_RUN_RE.search("run the tests")
+    # §103 categories: commands parse; set writes the managed block (Hello); create makes the folder + FRIDAY.md
+    assert NEWCAT_RE.fullmatch("สร้างหมวดใหม่ ชื่อ บทพากย์ YouTube กฎ เขียนสั้น กระชับ")[1] == "บทพากย์ YouTube"
+    assert SETCAT_RE.fullmatch("ตั้งหมวดโปรเจกต์เป็นนิยาย")[1] == "นิยาย" and SETCAT_RE.fullmatch("เปลี่ยนหมวดเป็น การตลาด หน่อย")[1] == "การตลาด"
+    assert LISTCAT_RE.fullmatch("มีหมวดอะไรบ้าง") and DELCAT_RE.fullmatch("ลบหมวด บทพากย์ YouTube")[1] == "บทพากย์ YouTube"
+    assert not SETCAT_RE.fullmatch("หมวดนี้ดีไหม") and not CREATE_PROJECT_RE.fullmatch("โปรเจกต์มีอะไรเปลี่ยนบ้าง")
+    assert not CREATE_PROJECT_RE.fullmatch("create a new file in this project") and CREATE_PROJECT_RE.fullmatch("start a novel project")
+    with tempfile.TemporaryDirectory() as d:
+        global PROJECTS_HOME
+        real_home, PROJECTS_HOME = PROJECTS_HOME, d
+        real_c, made = globals()["confirm"], []
+        real_set = rules.set_setting
+        try:
+            globals()["confirm"] = lambda *a, **k: made.append(k.get("strong")) or True
+            rules.set_setting = lambda *a, **k: None  # never the real settings.json
+            r = category_command("สร้างโปรเจกต์นิยาย ชื่อ ดาวพระศุกร์")
+            fmd = os.path.join(d, "ดาวพระศุกร์", "FRIDAY.md")
+            assert "ดาวพระศุกร์" in r and r.startswith("สร้างโปรเจกต์ เขียนนิยาย") and os.path.isfile(fmd) and categories.current(open(fmd, encoding="utf-8").read()) == "novel", r
+            assert category_command("create a new game project called Space Run").startswith("สร้างโปรเจกต์ สร้างเกม")
+            assert category_command("สร้างโปรเจกต์ใหม่ ชื่อ แผนQ4 หมวด การตลาด").startswith("สร้างโปรเจกต์ วางแผนการตลาด")
+            assert "เป็นหมวดไหน" in category_command("สร้างโปรเจกต์ ชื่อ อะไรสักอย่าง")
+            project.open_project(os.path.join(d, "ดาวพระศุกร์"))
+            open(fmd, "a", encoding="utf-8").write("\nกฎของฉันเอง\n")
+            assert category_command("ตั้งหมวดโปรเจกต์เป็นเรียน").startswith("ตั้งหมวด เรียน/ติว")
+            t = open(fmd, encoding="utf-8").read()
+            assert categories.current(t) == "study" and "กฎของฉันเอง" in t and t.count("friday:category:start") == 1
+            assert project_badge() == "📁 ดาวพระศุกร์ · เรียน/ติว" and made.count(True) == 4
+        finally:
+            globals()["confirm"], PROJECTS_HOME, rules.set_setting = real_c, real_home, real_set
+            project.close_project()
     assert project_command("open project settings in VS Code") is None and project_command("ใช้โปรเจกต์นี้ทำอะไรได้บ้าง") is None
     assert PROJECT_QUESTION_RE.search("what does the run() function do?") and PROJECT_QUESTION_RE.search("อธิบายว่าทำไมต้องแก้ตรงนี้")
     assert not PROJECT_QUESTION_RE.search("แก้ฟังก์ชัน add ให้รับ 3 ตัว")
@@ -3082,7 +3295,7 @@ def _turn(history, text):
                 panel.send(state="speaking")
                 say(reply)
             return
-        if (reply := project_command(text, SOURCE)) is not None:  # §102
+        if (reply := category_command(text, SOURCE)) is not None or (reply := project_command(text, SOURCE)) is not None:  # §103 §102
             print(f"FRIDAY> {reply}")
             panel.send(msg={"role": "user", "text": text})
             panel.send(msg={"role": "assistant", "text": reply})
@@ -3328,8 +3541,13 @@ def start_tray(history):
         rows = [item(f"{'✓ ' if project.ROOT and r.lower() == project.ROOT.lower() else ''}{os.path.basename(r)}",
                      (lambda r: bg(lambda: icon.notify(project_open(r, "tray"), "FRIDAY")))(r))
                 for r in (rules.settings().get("projects_recent") or []) if os.path.isdir(r)]
-        rows += [pystray.Menu.SEPARATOR, item("เลือกโฟลเดอร์…", bg(pick_project_folder))]
+        rows += [pystray.Menu.SEPARATOR, item("สร้างโปรเจกต์ใหม่…", bg(new_project_dialog)), item("เลือกโฟลเดอร์…", bg(pick_project_folder))]
         if project.ROOT:
+            now = project_category()
+            rows.append(item("หมวดของโปรเจกต์นี้", pystray.Menu(*[
+                item(v[0], (lambda k: bg(lambda: icon.notify(set_project_category(k, "tray"), "FRIDAY")))(k),
+                     checked=(lambda k: lambda _: project_category() == k)(k), radio=True)
+                for k, v in categories.all_categories(custom_categories()).items()])))
             rows.append(item("ออกจากโปรเจกต์", bg(lambda: icon.notify(project_close("tray"), "FRIDAY"))))
         return rows
 
