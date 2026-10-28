@@ -14,7 +14,7 @@ _find = _bm.find_binary_dependencies
 _bm.find_binary_dependencies = lambda binaries, packages, *rest: _find(
     binaries, [p for p in packages if os.path.isdir(os.path.join(SITE, p.split(".")[0] + ".libs"))], *rest)
 
-datas, binaries, hidden = [("app/ui.html", "."), ("app/video_player.html", "."), ("app/fonts", "fonts")], [], []
+datas, binaries, hidden = [("app/ui.html", "."), ("app/video_player.html", "."), ("app/video_story.js", "."), ("app/fonts", "fonts")], [], []
 for pkg in ("ctranslate2", "faster_whisper", "onnxruntime", "sherpa_onnx", "openwakeword", "webview",
             "pystray", "winrt", "clr_loader", "pythonnet", "docx", "pptx", "openpyxl", "pypdf",
             "sounddevice", "_sounddevice_data", "monitorcontrol", "comtypes", "pycaw", "qrcode",

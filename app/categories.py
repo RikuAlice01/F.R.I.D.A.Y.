@@ -43,6 +43,8 @@ BUILTIN = {
               "- Few words per scene, readable (~0.3 s a word); 'say' = one short spoken line per scene.\n"
               "- Show, don't only tell: infographics (bars, donut, line, steps, icons, a % gauge) for numbers, parts,\n"
               "  trends, processes and features — numbers only from the owner or the project's files.\n"
+              "- A story or tale (characters, dialogue): write script.md in the format the video_render tool gives, then\n"
+              "  video_render with file = script.md. Short shots: one narration or one spoken line each.\n"
               "- Pick a tone that fits: default, polished, cinematic, chaotic, deadpan, app-store, dark.\n"
               "- A strong brain may instead write video.html: every frame drawn by window.T(seconds), no network, then\n"
               "  video_render with file = video.html and seconds."),

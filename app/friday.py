@@ -54,7 +54,7 @@ import memory, rules, docsearch, tts_th, wakeword  # onnxruntime users: also aft
 import sessions, skills, documents, hardware, security, workspace, weather, reminders, media, tasks, windows, journal, voiceid
 import remote, brain, computer, project, categories, video
 
-__version__ = "0.48.0"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
+__version__ = "0.49.0"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
 OLLAMA = os.environ.get("FRIDAY_OLLAMA", "http://127.0.0.1:11434")
 MODEL = os.environ.get("FRIDAY_MODEL", "qwen3.5:4b")  # beat qwen3:8b 39/42 vs 33/42 with 1.7 GB less VRAM (PLAN §7)
 WHISPER = os.environ.get("FRIDAY_WHISPER", "large-v3-turbo")
@@ -226,7 +226,12 @@ PROJECT_TOOLS.append({"type": "function", "function": {  # §104 the brag way: C
         '"say": "voice-over line", "seconds": 3}]}. stat text = a number like "1,200+" (or "92%" = a gauge). Infographics: bars / donut / line take "data": '
         '[{"label": "...", "value": 45}] (+ "unit": "%"); steps = items in order ("2024: opened"); icons = items starting '
         'with an emoji ("☕ roasted daily"). Use only numbers the owner gave or the project files show. Or file = a page with window.T(t) '
-        "(then seconds is needed). The owner sees the scenes and approves; it renders in the background.",
+        "(then seconds is needed). STORIES (a cartoon with characters, a voice each, up to 10 min): write script.md instead and "
+        'call video_render with file = script.md. Format: "# Title" · "ตัวละคร: ต้น = ชาย ผมสั้น เสื้อขาว · มิว = หญิง ผมยาว ผิวขาว" · '
+        '"## ห้องเรียน กลางคืน [23:40]" (place: classroom/corridor/bathroom/bedroom/cafe/street/office/livingroom, day or night) · '
+        '"(ต้น นอน กลัว · มิว ยืน · ผี · กล้อง ใกล้)" (poses: นอน ยืน นั่ง เดิน ไฟฉาย ชี้; faces: หลับ ตกใจ กลัว ยิ้ม เจ้าเล่ห์ โกรธ เศร้า) · '
+        '"บรรยาย: narration" · "ต้น [กลัว]: a line" · *yellow word* · **red-box words**. '
+        "The owner sees the scenes and approves; it renders in the background.",
     "parameters": {"type": "object", "properties": {"file": {"type": "string"}, "seconds": {"type": "number"}, "mood": {"type": "string"}}}}})
 PROJECT_READ = {"project_files", "project_read", "project_search", "project_git"}
 PROJECT_ACT = {"project_edit", "project_run", "video_render"}
@@ -1479,11 +1484,19 @@ _video_busy, _video_cancel = threading.Lock(), threading.Event()  # §104 one vi
 def video_render(args):
     """§104 owner: "ดู storyboard แล้วกดยืนยันธรรมดา" — the scenes are shown, a plain yes, then it renders in the
     background into a new video-<time>.mp4 (never over an old one)."""
-    src = str(args.get("file") or "storyboard.json").strip()
+    # no file named: the one written last of script.md / storyboard.json (review §107: an old script won over a new storyboard)
+    have = [f for f in ("script.md", "storyboard.json") if os.path.isfile(project.inside(f))]
+    src = str(args.get("file") or max(have, key=lambda f: os.path.getmtime(project.inside(f)), default="storyboard.json")).strip()
     full = project.inside(src)
     if not os.path.isfile(full):
         return f"Failed: {src} does not exist in the project — write it first with project_edit (old = '')."
-    if src.lower().endswith(".json"):
+    if src.lower().endswith((".md", ".txt")):  # §107 a story script -> cartoon shots, a voice per character
+        try:
+            source = video.script(project._text(full))
+        except ValueError as e:
+            return f"Fix {src}: {e}"
+        what = video.summary(source)
+    elif src.lower().endswith(".json"):
         try:
             source = video.storyboard(project._text(full))
         except ValueError as e:  # JSONDecodeError too
@@ -1503,14 +1516,16 @@ def video_render(args):
             return f"Give seconds (1-{video.MAX_S}): how long {src} runs."
         source, what = project.rel(full), f"{project.rel(full)} · {seconds:.0f} วิ · หน้าเว็บที่เขียนเอง (ไม่มีเครือข่าย)"
     else:
-        return "Failed: file must be a storyboard .json or a page .html with window.T(t)."
+        return "Failed: file must be a story script.md, a storyboard .json or a page .html with window.T(t)."
     if not video.ffmpeg():
         return f"ffmpeg is not installed. Tell the owner to install it with: {video.INSTALL_FFMPEG} — then try again."
     if _video_busy.locked():
         return "A video is already being made. Wait for it, or the owner says 'หยุดทำวิดีโอ'."
     # a page the model wrote is code (sandboxed, but code): Windows Hello for it, and for anything after reading
     # text from outside this turn (review §104); a storyboard is data — a plain yes (owner)
-    if not confirm(f"ทำวิดีโอในโปรเจกต์ {project.name()}?", shown(what)[:900], strong=isinstance(source, str) or UNTRUSTED.is_set()):
+    if len(what) > 1500:  # review §107: a long story — say plainly that not every shot fits in the box
+        what = what[:1400].rsplit("\n", 1)[0] + f"\n… ทั้งหมด {len(source['scenes'])} ช็อต — บทเต็มอยู่ใน {src}"
+    if not confirm(f"ทำวิดีโอในโปรเจกต์ {project.name()}?", shown(what), strong=isinstance(source, str) or UNTRUSTED.is_set()):
         return "User declined."
     if not _video_busy.acquire(blocking=False):  # review: taken after the question, so a failing confirm can't keep it
         return "A video is already being made. Wait for it, or the owner says 'หยุดทำวิดีโอ'."
@@ -1530,7 +1545,7 @@ def video_render(args):
                 panel.send(msg={"role": "tool", "text": f"🎬 {int(f * 100)}% · {m}"})
         try:
             _video_cancel.clear()
-            out, secs = video.make(source, fence, mp4, tts=tts_wav, seconds=args.get("seconds"), mood=args.get("mood") or "bright",
+            out, secs = video.make(source, fence, mp4, tts=story_tts, seconds=args.get("seconds"), mood=args.get("mood") or "bright",
                                    progress=step, cancel=_video_cancel)
             security.audit(SOURCE, "video_render", out, "done")
             phone_alert(f"วิดีโอเสร็จแล้ว: {os.path.basename(out)} ({secs:.0f} วิ) ในโปรเจกต์ {os.path.basename(root)}")
@@ -1544,6 +1559,19 @@ def video_render(args):
     threading.Thread(target=run, daemon=True).start()
     return (f"Started: rendering {os.path.basename(mp4)} in the background (progress in the panel). Tell the owner it has "
             "started and that they will be told when it is done.")
+
+
+def story_tts(text, voice=None):
+    """§107 owner: "ผู้บรรยาย + เสียงตัวละครแยก" — the narrator is FRIDAY's voice, each character a VaniraTTS speaker."""
+    if not voice:
+        return tts_wav(text)
+    try:
+        wav = tts_th.synth_mixed(text, thai=lambda t: tts_th.synth_vanira(t, voice))
+        arm_tts_release()
+        return wav
+    except Exception as e:  # a speaker that fails: still a voice, FRIDAY's
+        print(f"  (เสียงตัวละคร {voice} ใช้ไม่ได้: {e})")
+        return tts_wav(text)
 
 
 VIDEO_STOP_RE = re.compile(r"\W*(?:หยุด|ยกเลิก)\s*(?:ทำ|สร้าง)?\s*(?:วิดีโอ|วีดีโอ|วีดิโอ|คลิป)\W*|\W*(?:stop|cancel) (?:the )?video\W*", re.I)
@@ -3052,7 +3080,8 @@ def selftest():
             sbp = os.path.join(d, "ดาวพระศุกร์", "storyboard.json")
             open(sbp, "w", encoding="utf-8").write('{"scenes": [{"type": "boom"}]}')
             assert video_render({}).startswith("Fix storyboard.json: scene 1") and video_render({"file": "x.json"}).startswith("Failed")
-            assert video_render({"file": "FRIDAY.md"}).startswith("Failed: file must be")
+            open(os.path.join(d, "ดาวพระศุกร์", "data.csv"), "w").write("a,b")
+            assert video_render({"file": "data.csv"}).startswith("Failed: file must be")
             open(sbp, "w", encoding="utf-8").write('{"scenes": [{"type": "title", "text": "ทดสอบ"}]}')
             made.clear()
             globals()["confirm"] = lambda *a, **k: made.append(k.get("strong", False)) and False
@@ -3061,6 +3090,15 @@ def selftest():
                 open(sbp, "w", encoding="utf-8").write('{"scenes": [{"type": "image", "image": "none.jpg", "text": "ไม่มีรูป"}]}')
                 globals()["confirm"] = lambda q, d="", **k: made.append(d) and False
                 assert video_render({}) == "User declined." and "[lines] ไม่มีรูป" in made[-1]  # a made-up picture -> words
+                spath = os.path.join(d, "ดาวพระศุกร์", "script.md")  # §107 a story script is picked first when there is one
+                open(spath, "w", encoding="utf-8").write("## ห้องเรียน กลางคืน\nต้น [กลัว]: *ใคร* อยู่ตรงนั้น\n")
+                assert video_render({}) == "User declined." and "ต้น: ใคร อยู่ตรงนั้น" in made[-1]
+                os.utime(sbp, (time.time() + 5, time.time() + 5))  # review: the newer storyboard wins over an old script
+                assert video_render({}) == "User declined." and "[lines] ไม่มีรูป" in made[-1]
+                open(spath, "w", encoding="utf-8").write("# แค่ชื่อ\n")
+                os.utime(spath, (time.time() + 10, time.time() + 10))
+                assert video_render({}).startswith("Fix script.md:")
+                os.remove(spath)
             assert video_command("หยุดทำวิดีโอ") == "ไม่ได้ทำวิดีโออยู่ค่ะ" and video_command("ทำวิดีโอโปรโมทร้าน") is None  # a project is open
             assert VIDEO_MAKE_RE.match("ช่วยทำวิดีโอโปรโมทร้านกาแฟ") and VIDEO_MAKE_RE.match("make a promo video for my app")
             assert not VIDEO_MAKE_RE.match("วิดีโอนี้ยาวเท่าไหร่") and VIDEO_STOP_RE.fullmatch("stop the video")

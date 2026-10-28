@@ -189,6 +189,9 @@ def summary(sb):
     """What the owner sees before saying yes."""
     w, h = SIZES[sb["format"]]
     rows = [f"{sb['title']} · {sb['seconds']:.0f} วิ · {w}×{h} · โทน {sb['tone']} · เพลง {sb['mood']}" + (" · พากย์" if sb["voice"] else "")]
+    if sb.get("story"):  # §107 a script: one line per shot
+        return "\n".join(rows + [f"{i}. [{s.get('place', '')}{' กลางคืน' if s.get('time') == 'night' else ''}] "
+                                  + (f"{s['speaker']}: " if s.get("speaker") else "") + _plain(s["text"]) for i, s in enumerate(sb["scenes"], 1)])
     for i, s in enumerate(sb["scenes"], 1):
         data = ", ".join(f"{d['label']} {d['value']:g}{s['unit']}" for d in s.get("data") or [])
         rows.append(f"{i}. [{s['type']}] {s['text'] or s['image']}" + (f" — {s['sub']}" if s["sub"] else "")
@@ -202,6 +205,219 @@ def player_html(sb):
     scenes = [dict(s, image="/" + urllib.parse.quote(s["image"].lstrip("/")) if s["image"] else "") for s in sb["scenes"]]
     data = json.dumps(dict(sb, scenes=scenes), ensure_ascii=False).replace("<", "\\u003c")  # no </script> from a model
     return page.replace("/*STORYBOARD*/{}", data, 1)
+
+
+
+# ---------- §107 story scripts (script.md) -> shots, in the style the owner sent: a 2D cartoon with captions ----------
+STORY_MAX_S, STORY_SHOTS = 600, 250  # owner: "ถึง 10 นาที"
+PLACES = {"classroom": r"ห้องเรียน|โรงเรียน|classroom|school", "corridor": r"ทางเดิน|โถง|ระเบียง|corridor|hall",
+          "bathroom": r"ห้องน้ำ|ห้องส้วม|bathroom|toilet", "bedroom": r"ห้องนอน|หอพัก|bedroom|dorm",
+          "cafe": r"ร้านกาแฟ|คาเฟ่|ร้าน|cafe|café|shop", "street": r"ถนน|ซอย|ข้างนอก|นอกบ้าน|ตลาด|street|road|outside",
+          "office": r"ออฟฟิศ|ที่ทำงาน|ห้องทำงาน|บริษัท|office", "livingroom": r"ห้องนั่งเล่น|บ้าน|living|home"}
+NIGHT = r"กลางคืน|ตอนดึก|ดึก|คืน|มืด|night|dark|midnight"
+POSES = {"lie": r"นอน|lie|lying|in bed", "sit": r"นั่ง|sit", "walk": r"เดิน|walk", "flashlight": r"ไฟฉาย|ส่องไฟ|flashlight|torch",
+         "phone": r"โทรศัพท์|มือถือ|phone", "point": r"ชี้|point", "stand": r"ยืน|stand"}
+FACES = {"sleep": r"หลับ|sleep", "shock": r"ตกใจ|อึ้ง|ช็อก|shock|surprised", "scared": r"กลัว|หวาด|ขนลุก|scared|afraid",
+         "smile": r"ยิ้ม|ดีใจ|หัวเราะ|happy|smile|laugh", "smirk": r"เจ้าเล่ห์|แสยะ|กวน|smirk|sly", "angry": r"โกรธ|โมโห|angry|mad",
+         "sad": r"เศร้า|ร้องไห้|เสียใจ|sad|cry", "normal": r"ปกติ|เฉย|normal"}
+SKINS = [(r"ขาวมาก|ซีด|pale", "#f3cfae"), (r"สองสี|น้ำผึ้ง|tan", "#d9a273"), (r"คล้ำ|ดำ|dark", "#b9814f"), (r"เข้ม|brown", "#8d5a35"),
+         (r"ขาว|fair|light", "#ebc39a")]
+COLORS = [(r"ขาว|white", "#eef0f3"), (r"ดำ|black", "#2b2d33"), (r"เทา|grey|gray", "#9aa0a8"), (r"กรม|navy", "#2f4170"),
+          (r"น้ำเงิน|blue", "#3f6fc0"), (r"ฟ้า|sky|light blue", "#7fb0e0"), (r"แดง|red", "#d4463f"), (r"ชมพู|pink", "#f29bb8"),
+          (r"ส้ม|orange", "#f08a3c"), (r"เหลือง|yellow", "#f2c94c"), (r"เขียว|green", "#5f9e6e"), (r"ม่วง|purple", "#8a6cc4"),
+          (r"น้ำตาล|brown", "#8a5a36"), (r"ครีม|cream|beige", "#e8dcc2")]
+HAIR_COLORS = [(r"ทอง|blond", "#d9b25a"), (r"น้ำตาล|brown", "#6b4429"), (r"เทา|ขาว|หงอก|grey|gray|white", "#c9c9c9"), (r"แดง|red", "#9c3b2a")]
+DEFAULT_TOPS = ["#eef0f3", "#7fb0e0", "#f29bb8", "#5f9e6e", "#f2c94c", "#8a6cc4"]
+NARRATOR = r"บรรยาย|ผู้บรรยาย|เล่า|narrator|narration"
+
+
+def _pick(pairs, text, default=None):
+    return next((v for rx, v in pairs if re.search(rx, text, re.I)), default)
+
+
+def look(desc, i):
+    """'หญิง ผมยาวสีน้ำตาล ผิวขาว เสื้อนักเรียน แว่น' -> the drawing's fixed options (no free text reaches the page)."""
+    d = str(desc)
+    female = bool(re.search(r"หญิง|ผู้หญิง|สาว|ยาย|แม่|girl|woman|female|she", d, re.I))
+    old = bool(re.search(r"แก่|คนแก่|ยาย|ตา\b|ปู่|ย่า|old|grand", d, re.I))
+    hair = ("bald" if re.search(r"โล้น|ล้าน|bald", d, re.I) else "ponytail" if re.search(r"หางม้า|ponytail", d, re.I)
+            else "curly" if re.search(r"หยิก|ฟู|curly", d, re.I) else "long" if re.search(r"ผมยาว|long hair", d, re.I)
+            else "short" if re.search(r"ผมสั้น|short hair", d, re.I) else "long" if female else "short")
+    hm = re.search(r"ผม\S*?สี?(\S+)|(\S+)\s*hair", d, re.I)
+    hair_color = _pick(HAIR_COLORS, hm.group(0) if hm else "", "#c9c9c9" if old else "#1d1a1a")
+    sm = re.search(r"ผิว\s*(\S+)|(\S+)\s*skin", d, re.I)
+    skin = _pick(SKINS, sm.group(0) if sm else "", ["#e3b088", "#c98f5f"][i % 2])
+    top = ("hoodie" if re.search(r"ฮู้ด|hood", d, re.I) else "suit" if re.search(r"สูท|suit|เชิ้ต|shirt", d, re.I)
+           else "dress" if re.search(r"เดรส|กระโปรง|dress|skirt", d, re.I) else "tee" if re.search(r"เสื้อยืด|t-?shirt|tee", d, re.I)
+           else "student" if d.strip() else ("student", "hoodie", "tee")[i % 3])  # no description: not everyone in white
+    tm = re.search(r"(?:เสื้อ|ฮู้ด|สูท|เดรส|ชุด|hoodie|shirt|suit|dress)\S*\s*(?:สี)?\s*\S*", d, re.I)
+    color = _pick(COLORS, tm.group(0) if tm else "", "#eef0f3" if top == "student" else DEFAULT_TOPS[i % len(DEFAULT_TOPS)])
+    if top == "suit" and not tm:
+        color = "#2b2d33"
+    return {"gender": "f" if female else "m", "hair": hair, "hairColor": hair_color, "skin": skin, "top": top, "color": color,
+            "glasses": bool(re.search(r"แว่น|glasses", d, re.I)), "age": "old" if old else ""}
+
+
+def _plain(text):
+    return re.sub(r"\*+", "", text).strip()
+
+
+def _chunks(text, n=90):
+    """A long narration line -> caption-sized pieces, split at spaces (Thai: the writer's own spaces); a long run with
+    no spaces is cut between Thai words (review §107: one 350-character sentence became one cut-off caption)."""
+    out, cur = [], ""
+    words = re.split(r"(\s+)", text)
+    if any(len(w) > n for w in words):
+        try:
+            from pythainlp.tokenize import word_tokenize
+            words = [t for w in words for t in (word_tokenize(w, engine="newmm") if len(w) > n else [w])]
+        except Exception:  # no word list: cut by length
+            words = [w[i:i + n] for w in words for i in range(0, max(1, len(w)), n)]
+    for w in words:
+        if len(cur) + len(w) > n and cur.strip():
+            out.append(cur.strip())
+            cur = ""
+        cur += w
+    return out + ([cur.strip()] if cur.strip() else [])
+
+
+def script(text):
+    """script.md -> a storyboard of shots. The format (any brain can write it, part by part):
+        # ชื่อเรื่อง
+        ตัวละคร: ต้น = ชาย ผมสั้น เสื้อขาว · แบงค์ = ชาย ผิวคล้ำ ฮู้ดฟ้า
+        ซับ: เน้นคำ | ธรรมดา | ไม่มี
+        ## ห้องเรียน กลางคืน [23:40]
+        (ต้น นอน กลัว · แบงค์ นอน หลับ · ผี · กล้อง ใกล้)
+        บรรยาย: คืนที่โรงเรียน *จัดเข้าค่าย*
+        ต้น [กลัว]: ไอ้แบงค์ **มึงหลับยังวะ**"""
+    title, cast, order, shots = "", {}, [], []
+    captions, fmt = "story", "vertical"
+    place, night, badge, present, ghost, camera = "classroom", False, "", [], False, None
+    state = {}  # name -> {pose, face}
+
+    def member(name):
+        name = name.strip()[:20]
+        if name not in cast:
+            cast[name] = {"look": look("", len(order)), "index": len(order)}
+            order.append(name)
+        if name not in present:
+            present.append(name)
+        state.setdefault(name, {"pose": "stand", "face": "normal"})
+        return name
+
+    def add(speaker, words, face=None):
+        nonlocal camera
+        for piece in _chunks(words):
+            k = len(present)
+            shots.append({"type": "shot", "place": place, "time": "night" if night else "day", "badge": badge, "ghost": ghost,
+                          "speaker": speaker or "", "text": piece[:200], "say": _plain(piece)[:300],
+                          "camera": camera or ("close" if speaker else "wide" if len(shots) % 3 else "pan"),
+                          "cast": [dict(name=n, look=cast[n]["look"], index=cast[n]["index"], pose=state[n]["pose"],
+                                        face=face if (n == speaker and face) else state[n]["face"],
+                                        x=round(.5 if k == 1 else .2 + .6 * i / max(1, k - 1), 3)) for i, n in enumerate(present)]})
+        camera = None
+
+    def define(item):
+        if mm := re.match(r"\s*([^=(（:：]{1,20}?)\s*(?:=|[(（]|[:：])\s*(.+?)[)）]?\s*$", item):
+            name = mm[1].strip()
+            if name not in cast:
+                order.append(name)
+            cast[name] = {"look": look(mm[2], order.index(name)), "index": order.index(name)}
+
+    in_cast = False  # a "## ตัวละคร" heading with "- name: looks" lines under it (how small models write it)
+    for raw in str(text).splitlines():
+        line = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s+", "", raw).strip()  # list bullets
+        if not line or line.startswith("<!--"):
+            continue
+        if m := re.match(r"#\s+(.+)", line):
+            title = re.sub(r"\s*\[[^\]]*\]", "", m[1]).strip()[:80]
+            badge = (re.search(r"\[(\d{1,2}[:.]\d{2})\]", m[1]) or [None, badge])[1]
+        elif re.fullmatch(r"#{2,}\s*(?:ตัวละคร|cast|characters)\s*[:：]?", line, re.I):
+            in_cast = True
+        elif m := re.match(r"(?:ตัวละคร|cast|characters)\s*[:：]\s*(.*)", line, re.I):
+            for item in re.split(r"[·•;|]|,(?=[^,]*=)", m[1]):
+                define(item)
+            in_cast = not m[1].strip()
+        elif in_cast and not line.startswith("#") and re.search(r"[=:：(（]", line):
+            define(line)
+        elif m := re.match(r"(?:ซับ|caption|captions|subtitles?)\s*[:：]\s*(.+)", line, re.I):
+            captions = ("none" if re.search(r"ไม่มี|ปิด|none|off", m[1], re.I) else "simple" if re.search(r"ธรรมดา|simple|plain", m[1], re.I)
+                        else "story")
+        elif m := re.match(r"(?:ขนาด|format)\s*[:：]\s*(.+)", line, re.I):
+            fmt = ("landscape" if re.search(r"แนวนอน|landscape|16:9|youtube", m[1], re.I) else "square" if re.search(r"สี่เหลี่ยม|square|1:1", m[1], re.I)
+                   else "vertical")
+        elif m := re.match(r"##\s*(.+)", line):
+            in_cast, head = False, m[1]
+            place = next((k for k, rx in PLACES.items() if re.search(rx, head, re.I)), place)
+            night = bool(re.search(NIGHT, head, re.I)) and not re.search(r"กลางวัน|เช้า|day|morning", head, re.I)
+            badge = (re.search(r"\[(\d{1,2}[:.]\d{2})\]", head) or [None, ""])[1]
+            present, ghost = [], False
+        elif re.fullmatch(r"\[(\d{1,2}[:.]\d{2})\]", line):
+            badge = line[1:-1]
+        elif m := re.fullmatch(r"[(（](.+)[)）]", line):
+            for tok in re.split(r"[·•,，、/]", m[1]):
+                tok = tok.strip()
+                if not any(tok.startswith(n) for n in order) and (pl := next((k for k, rx in PLACES.items() if re.search(rx, tok, re.I)), None)):
+                    place = pl  # "(ห้องน้ำ, กลางคืน)": a place given as a direction
+                if re.search(NIGHT, tok, re.I) and not any(tok.startswith(n) for n in order):
+                    night = True
+                elif re.search(r"กลางวัน|ตอนเช้า|morning|daytime", tok, re.I) and not any(tok.startswith(n) for n in order):
+                    night = False
+                elif re.search(r"ผี|วิญญาณ|เงาดำ|เงาสูง|ghost|shadow", tok, re.I):
+                    ghost = not re.search(r"หาย|ไป|gone|away", tok, re.I)
+                elif re.search(r"กล้อง|camera", tok, re.I):
+                    camera = "close" if re.search(r"ใกล้|close", tok, re.I) else "pan" if re.search(r"แพน|pan", tok, re.I) else "wide"
+                elif mm := re.match(r"(ทุกคน|everyone|all)\s*(.*)", tok, re.I):
+                    for n in present:
+                        state[n]["pose"] = next((k for k, rx in POSES.items() if re.search(rx, mm[2], re.I)), state[n]["pose"])
+                        state[n]["face"] = next((k for k, rx in FACES.items() if re.search(rx, mm[2], re.I)), state[n]["face"])
+                elif re.search(r"ออก|หายไป|leaves?|exit", tok, re.I) and (n := next((n for n in present if tok.startswith(n)), None)):
+                    present.remove(n)
+                elif n := next((n for n in sorted(set(order) | set(present), key=len, reverse=True) if tok.startswith(n)), None) or (
+                        (w := tok.split(maxsplit=1)) and len(w) == 2 and len(w[0]) <= 20 and any(re.search(rx, w[1], re.I) for rx in [*POSES.values(), *FACES.values()])
+                        and not any(re.search(rx, w[0], re.I) for rx in [*POSES.values(), *FACES.values()]) and w[0]):  # "(ไฟฉาย ชี้)" is no one
+                    # a name the cast line didn't list ("(ต้น นั่งกลัว)"): the first word, when the rest is a pose or face
+                    member(n)
+                    rest = tok[len(n):]
+                    state[n]["pose"] = next((k for k, rx in POSES.items() if re.search(rx, rest, re.I)), state[n]["pose"])
+                    state[n]["face"] = next((k for k, rx in FACES.items() if re.search(rx, rest, re.I)), state[n]["face"])
+        elif (m := re.match(r"([^:：\[\(（]{1,20}?)\s*(?:[\[(（]([^\])）]{1,20})[\])）])?\s*[:：]\s*(.+)", line)) and (
+                m[1].strip() in cast or re.fullmatch(NARRATOR, m[1].strip(), re.I) or re.fullmatch(r"[^\d\s]{1,12}", m[1].strip())
+                and not re.fullmatch(r"หมายเหตุ|เวลา|สถานที่|ฉาก|ตอน(?:ที่)?|note|time|scene|place|https?", m[1].strip(), re.I)):
+            if re.fullmatch(NARRATOR, m[1].strip(), re.I):
+                add("", m[3])
+            else:
+                name = member(m[1])
+                if pose := next((k for k, rx in POSES.items() if re.search(rx, m[2] or "", re.I)), None):
+                    state[name]["pose"] = pose  # "บอส [เดินเข้ามา]: …"
+                add(name, re.sub(r'^\s*["“”]+|["“”]+\s*$', "", m[3]), next((k for k, rx in FACES.items() if re.search(rx, m[2] or "", re.I)), None))
+        else:
+            add("", line)
+        if len(shots) > STORY_SHOTS:
+            raise ValueError(f"the script is longer than {STORY_SHOTS} shots — split it into episodes (script-ep1.md, script-ep2.md …)")
+    if not shots:
+        raise ValueError("the script has no lines to show — write 'บรรยาย: …' or 'ชื่อ: …' lines under a '## place' heading")
+    for a, b in zip(shots, shots[1:]):
+        a["cut"] = a["place"] == b["place"] and a["time"] == b["time"]  # same place: a hard cut, no dip
+    if title:
+        shots.append({"type": "endcard", "text": title, "sub": "", "say": "", "seconds": 3.5})
+    for sh in shots:
+        sh.setdefault("seconds", round(min(20.0, max(1.8, read_seconds(_plain(sh["text"])))), 2))
+        sh.update(talk0=0.3, talk1=sh["seconds"] - 0.3)
+        sh.setdefault("items", []); sh.setdefault("image", ""); sh.setdefault("sub", "")
+    voices, count = {}, {"f": 0, "m": 0}
+    for n in order:  # each character their own voice (VaniraTTS: 2 5 female, 3 4 6 male); the narrator is FRIDAY
+        g = cast[n]["look"]["gender"]
+        voices[n] = str((["2", "5"] if g == "f" else ["3", "4", "6"])[count[g] % (2 if g == "f" else 3)])
+        count[g] += 1
+    for sh in shots:
+        sh["voice"] = voices.get(sh.get("speaker") or "", None)
+    sb = {"title": title or "story", "format": fmt, "tone": "dark", "mood": "calm", "voice": True, "colors": {}, "story": True,
+          "captions": captions, "scenes": shots, "max_s": STORY_MAX_S}
+    timeline(sb)
+    if sb["seconds"] > STORY_MAX_S:  # review: before any voice is made, not after
+        raise ValueError(f"the story would run about {sb['seconds'] / 60:.0f} min — the limit is {STORY_MAX_S // 60} min; split it into episodes")
+    return sb
 
 
 # ---------- sound ----------
@@ -295,14 +511,16 @@ def pcm(wav_bytes):
 def voice_lines(sb, tts, cancel=None):
     """Synthesize every 'say' and stretch its scene to fit the line (+0.8 s). -> [(start, samples)]"""
     lines = []
-    for s in sb["scenes"]:
+    # one voice after another (review §107: alternating characters restarted a TTS worker on almost every line)
+    for s in sorted(sb["scenes"], key=lambda x: str(x.get("voice") or "")):
         if cancel is not None and cancel.is_set():
             raise Cancelled()
         if s["say"] and sb["voice"]:
-            a = pcm(tts(s["say"]))
-            s["seconds"] = round(max(s["seconds"], len(a) / SR + 0.8), 2)
+            a = pcm(tts(s["say"], s["voice"]) if s.get("voice") else tts(s["say"]))  # §107 a character's own voice
+            s["seconds"] = round(max(s["seconds"], len(a) / SR + (0.5 if sb.get("story") else 0.8)), 2)
+            s["talk0"], s["talk1"] = 0.3, 0.3 + len(a) / SR
             lines.append((s, a))
-    timeline(sb)
+    timeline(sb)  # starts are known only now: the scenes kept their order, only the voices were made by voice
     return [(s["start"] + 0.3, a) for s, a in lines]
 
 
@@ -337,6 +555,8 @@ def serve(inside, player=None):
             try:
                 if path == "/__friday/player.html" and player is not None:
                     body, kind = player.encode("utf-8"), "text/html; charset=utf-8"
+                elif path == "/__friday/story.js":  # §107 the cartoon kit
+                    body, kind = open(os.path.join(HERE, "video_story.js"), "rb").read(), "text/javascript"
                 else:
                     if path.startswith("/__friday/fonts/") and re.fullmatch(r"[\w.-]+\.ttf", name := path.rsplit("/", 1)[1]):
                         full = os.path.join(fonts, name)
@@ -501,43 +721,66 @@ def open_page(url, w, h, prof):
         raise
 
 
-def frames(cdp, seconds, w, h, out_dir, progress=None, cancel=None, fps=FPS):
+def frames(cdp, seconds, w, h, sink, progress=None, cancel=None, fps=FPS):
     total = max(1, int(round(seconds * fps)))
     for i in range(total):
         if cancel is not None and cancel.is_set():
             raise Cancelled()
         cdp.js(f"Promise.resolve(window.T({i / fps:.4f})).then(() => 1)")
         shot = cdp.call("Page.captureScreenshot", format="jpeg", quality=92, clip={"x": 0, "y": 0, "width": w, "height": h, "scale": 1})
-        with open(os.path.join(out_dir, f"{i:06d}.jpg"), "wb") as f:
-            f.write(base64.b64decode(shot["data"]))
+        sink(base64.b64decode(shot["data"]))
         if progress and i % fps == 0:
             progress(i / total, f"เฟรม {i}/{total}")
     return total
 
 
-def encode(frame_dir, wav, out, fps=FPS, cancel=None):
-    ff = ffmpeg()
-    if not ff:
-        raise RuntimeError(f"ffmpeg is not installed — install it with: {INSTALL_FFMPEG}")
-    part = out + ".part.mp4"
-    cmd = [ff, "-y", "-loglevel", "error", "-framerate", str(fps), "-i", os.path.join(frame_dir, "%06d.jpg")]
-    cmd += ["-i", wav] if wav else []
-    cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
-    cmd += ["-c:a", "aac", "-b:a", "192k", "-shortest"] if wav else []
-    log = os.path.join(frame_dir, "ffmpeg.log")
-    with open(log, "w") as err:
-        p = subprocess.Popen(cmd + [part], stdout=subprocess.DEVNULL, stderr=err, creationflags=FLAGS)
-        while p.poll() is None:  # "หยุดทำวิดีโอ" works while encoding too
+class Encoder:
+    """ffmpeg reading JPEG frames from a pipe while they are captured (§107: a 10-minute video would be GBs of frames
+    on disk), the soundtrack from a WAV. Writes <out>.part.mp4, renamed when complete."""
+
+    def __init__(self, wav, out, log, fps=FPS):
+        ff = ffmpeg()
+        if not ff:
+            raise RuntimeError(f"ffmpeg is not installed — install it with: {INSTALL_FFMPEG}")
+        self.out, self.part, self.log = out, out + ".part.mp4", log
+        cmd = [ff, "-y", "-loglevel", "error", "-f", "image2pipe", "-c:v", "mjpeg", "-framerate", str(fps), "-i", "-"]
+        cmd += ["-i", wav] if wav else []
+        cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+        cmd += ["-c:a", "aac", "-b:a", "192k", "-shortest"] if wav else []
+        self.err = open(log, "w")
+        try:
+            self.p = subprocess.Popen(cmd + [self.part], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=self.err, creationflags=FLAGS)
+        except OSError:
+            self.err.close()
+            raise
+
+    def write(self, data):
+        try:
+            self.p.stdin.write(data)
+        except OSError:
+            raise RuntimeError("ffmpeg stopped: " + open(self.log, errors="replace").read()[-300:])
+
+    def finish(self, cancel=None):
+        try:
+            self.p.stdin.close()
+        except OSError:  # ffmpeg already gone: its log says why (below)
+            pass
+        while self.p.poll() is None:  # "หยุดทำวิดีโอ" works while ffmpeg finishes too
             if cancel is not None and cancel.is_set():
-                _kill(p)
-                p.wait()
-                if os.path.exists(part):
-                    os.remove(part)
+                self.abort()
                 raise Cancelled()
-            time.sleep(0.3)
-    if p.returncode or not os.path.isfile(part):
-        raise RuntimeError("ffmpeg failed: " + open(log, errors="replace").read()[-300:])
-    os.replace(part, out)
+            time.sleep(0.2)
+        self.err.close()
+        if self.p.returncode or not os.path.isfile(self.part):
+            raise RuntimeError("ffmpeg failed: " + open(self.log, errors="replace").read()[-300:])
+        os.replace(self.part, self.out)
+
+    def abort(self):
+        _kill(self.p)
+        self.p.wait()
+        self.err.close()
+        if os.path.exists(self.part):
+            os.remove(self.part)
 
 
 def make(source, inside, out, tts=None, seconds=None, fmt=None, mood="bright", progress=None, cancel=None, size=None):
@@ -547,13 +790,14 @@ def make(source, inside, out, tts=None, seconds=None, fmt=None, mood="bright", p
     if not ffmpeg():
         raise RuntimeError(f"ffmpeg is not installed — install it with: {INSTALL_FFMPEG}")
     work = tempfile.mkdtemp(prefix="friday-video-")
-    srv = p = cdp = None
+    srv = p = cdp = enc = None
     try:
         if isinstance(source, dict):
             sb = source
             lines = voice_lines(sb, tts, cancel) if sb["voice"] and tts else []
-            if sb["seconds"] > MAX_S:  # review: the voice stretched the scenes past the limit
-                raise ValueError(f"with the voice-over the video would be {sb['seconds']:.0f} s (limit {MAX_S} s) — shorter 'say' lines")
+            limit = sb.get("max_s", MAX_S)
+            if sb["seconds"] > limit:  # review: the voice stretched the scenes past the limit
+                raise ValueError(f"with the voice-over the video would be {sb['seconds']:.0f} s (limit {limit} s) — shorter lines")
             seconds, fmt, mood, player = sb["seconds"], sb["format"], sb["mood"], player_html(sb)
             path = "__friday/player.html"
         else:
@@ -568,16 +812,19 @@ def make(source, inside, out, tts=None, seconds=None, fmt=None, mood="bright", p
         mixdown(seconds, mood, lines, wav)
         srv = serve(inside, player)
         os.makedirs(prof := os.path.join(work, "edge"))
-        os.makedirs(fdir := os.path.join(work, "frames"))
         p, cdp = open_page(f"http://127.0.0.1:{srv.server_address[1]}/{urllib.parse.quote(path)}", w, h, prof)
-        frames(cdp, seconds, w, h, fdir, lambda f, m: progress(0.05 + 0.85 * f, m), cancel)
+        enc = Encoder(wav, out, os.path.join(work, "ffmpeg.log"))
+        frames(cdp, seconds, w, h, enc.write, lambda f, m: progress(0.05 + 0.9 * f, m), cancel)
         cdp.close()
         _kill(p)
         p = cdp = None
-        progress(0.92, "รวมเป็น mp4")
-        encode(fdir, wav, out, cancel=cancel)
+        progress(0.96, "รวมเป็น mp4")
+        enc.finish(cancel)
+        enc = None
         return out, seconds
     finally:
+        if enc:
+            enc.abort()
         if cdp:
             cdp.close()
         _kill(p)
@@ -591,7 +838,8 @@ if __name__ == "__main__":
                                                                    {"type": "stat", "text": "1,200+", "sub": "users"}]})
     assert sb["scenes"][0]["start"] == 0 and sb["seconds"] > 3 and sb["format"] == "landscape" and not sb["voice"]
     page = player_html(storyboard({"scenes": [{"type": "title", "text": "</script><script>x()"}]}))
-    assert page.count("</script>") == 1 and "\\u003c/script>" in page  # a model's text can't end the script
+    tags = open(os.path.join(HERE, "video_player.html"), encoding="utf-8").read().count("</script>")
+    assert page.count("</script>") == tags and "\\u003c/script>" in page  # a model's text can't end the script
     for bad in ({"scenes": []}, {"scenes": [{"type": "boom", "text": "x"}]}, {"scenes": [{"type": "image", "image": "a.exe"}]}, {"scenes": [{"type": "lines"}]}, [1, 2], {"scenes": [{"type": "cards", "text": "x", "items": 3}]}, {"scenes": "x"},
                 {"scenes": [{"type": "image", "image": 'x".png'}]}, {"scenes": [{"type": "image", "image": "file:///c:/x.png"}]},
                 {"scenes": [{"type": "lines", "text": "x", "seconds": 12}] * 11}):
@@ -620,6 +868,51 @@ if __name__ == "__main__":
                                                   {"type": "stat", "text": "1,200+", "sub": "ผู้ติดตาม"}]})["scenes"]
     assert [s["type"] for s in auto] == ["bars", "stat", "donut", "stat"], [s["type"] for s in auto]
     assert auto[0]["data"][0] == {"label": "ลาเต้", "value": 420} and auto[0]["unit"] == " แก้ว" and auto[2]["data"][1]["value"] == 45
+    # §107 a story script -> shots
+    st = script("# ผีห้องเรียน\nตัวละคร: ต้น = ชาย ผมสั้น ผิวคล้ำ เสื้อขาว · มิว = หญิง ผมยาวสีน้ำตาล ฮู้ดชมพู แว่น\nซับ: เน้นคำ\n"
+                "## ห้องเรียน กลางคืน [23:40]\n(ต้น นอน กลัว · มิว นอน หลับ · กล้อง ใกล้)\nบรรยาย: คืนนั้น *เงียบมาก*\n"
+                "ต้น [ตกใจ]: มิว **ได้ยินไหม**\n(ผี)\nเสียงเดินดังขึ้น\n## ทางเดิน กลางวัน\n(มิว ยืน ยิ้ม)\nมิว: ไม่มีอะไรหรอก\n"
+                "โจ: ใครเรียก\n<!-- note -->")
+    sh = st["scenes"]
+    assert st["story"] and st["captions"] == "story" and st["format"] == "vertical" and st["title"] == "ผีห้องเรียน"
+    assert [x["type"] for x in sh] == ["shot"] * 5 + ["endcard"] and sh[0]["camera"] == "close" and sh[1]["camera"] == "close"
+    assert sh[0]["place"] == "classroom" and sh[0]["time"] == "night" and sh[0]["badge"] == "23:40" and sh[3]["place"] == "corridor" and sh[3]["time"] == "day"
+    assert sh[0]["say"] == "คืนนั้น เงียบมาก" and sh[0]["text"] == "คืนนั้น *เงียบมาก*" and not sh[2]["speaker"] and sh[2]["ghost"] and not sh[3]["ghost"]
+    ton, miu = sh[1]["cast"]
+    assert (ton["name"], ton["pose"], ton["face"], miu["face"]) == ("ต้น", "lie", "shock", "sleep") and sh[2]["cast"][0]["face"] == "scared"
+    assert ton["look"]["skin"] == "#b9814f" and ton["look"]["color"] == "#eef0f3" and ton["look"]["hair"] == "short"
+    assert miu["look"] == {**miu["look"], "gender": "f", "hair": "long", "hairColor": "#6b4429", "top": "hoodie", "color": "#f29bb8", "glasses": True}
+    assert sh[1]["voice"] == "3" and sh[3]["voice"] == "2" and sh[0]["voice"] is None and sh[4]["speaker"] == "โจ" and sh[4]["voice"] == "4"
+    assert sh[0]["cut"] and not sh[2]["cut"] and len(sh[3]["cast"]) == 1 and "2. [classroom กลางคืน] ต้น: มิว ได้ยินไหม" in summary(st)
+    small = script("# ออฟฟิศ [10:00]\n## ตัวละคร\n- นุ่น: หญิงสาวผมสั้น เสื้อยืดขาว\n- บอส: ชายใส่สูทสีเทา\n"  # how the 4B model writes it
+                   "## ห้องทำงาน กลางวัน\n(นุ่น นั่งอยู่ที่โต๊ะ · บอส เดินเข้ามา)\nบอส [ยืนตรง]: \"วันนี้มีงานด่วน\"\n"
+                   "(ห้องน้ำ/โถงทางเดิน, กลางคืน)\nนุ่น [ตกใจ]: “ลืมแล้ว!”")["scenes"]
+    assert [c["name"] for c in script("## ห้องเรียน\n(ต้น นั่งกลัว · แบงค์ ยืน)\nบรรยาย: เงียบ")["scenes"][0]["cast"]] == ["ต้น", "แบงค์"]
+    assert [c["name"] for c in script("## ห้องเรียน\n(ต้น ยืน · ไฟฉาย ชี้)\nบรรยาย: เงียบ")["scenes"][0]["cast"]] == ["ต้น"]
+    assert small[0]["place"] == "office" and small[0]["time"] == "day" and small[0]["say"] == "วันนี้มีงานด่วน" and small[0]["speaker"] == "บอส"
+    assert [c["pose"] for c in small[0]["cast"]] == ["sit", "stand"] and small[0]["cast"][1]["look"]["top"] == "suit"
+    assert small[0]["cast"][0]["look"]["gender"] == "f" and small[0]["cast"][0]["look"]["hair"] == "short"
+    assert small[1]["place"] == "corridor" and small[1]["time"] == "night" and small[1]["say"] == "ลืมแล้ว!" and small[2]["text"] == "ออฟฟิศ"
+    colon = script("## ห้องเรียน\nเวลา 23:40 น. ทุกคนหลับ\nหมายเหตุ: ห้องมืด\nต้น: ใครน่ะ")["scenes"]  # review: a colon isn't a speaker
+    assert [x["speaker"] for x in colon[:3]] == ["", "", "ต้น"] and [c["name"] for c in colon[2]["cast"]] == ["ต้น"]
+    thai = script("## ถนน\nบรรยาย: " + "แมวส้มเดินกลับบ้านคนเดียวในคืนที่ฝนตกหนักมาก" * 8)["scenes"]
+    assert len(thai) >= 4 and all(len(x["text"]) <= 90 for x in thai)  # Thai with no spaces is cut between words
+    many = script("ตัวละคร: " + " · ".join(f"ก{i} = หญิง" for i in range(45)) + "\n## ห้องเรียน\n" + "\n".join(f"ก{i}: สวัสดี" for i in range(45)))
+    assert {x["voice"] for x in many["scenes"] if x.get("speaker")} == {"2", "5"}  # more characters than voices: reused, no crash
+    for too_long in ("## ถนน\n" + "บรรยาย: เงียบ\n" * 260, "## ถนน\n" + ("บรรยาย: " + "คำ " * 29 + "\n") * 200):
+        try:
+            script(too_long)
+            raise AssertionError("too long accepted")
+        except ValueError:
+            pass
+    long_line = script("## ถนน\nบรรยาย: " + "คำ " * 80)["scenes"]
+    assert len(long_line) == 3 and all(len(x["text"]) <= 90 for x in long_line)  # caption-sized pieces
+    for bad in ("", "# แค่ชื่อเรื่อง"):
+        try:
+            script(bad)
+            raise AssertionError(bad)
+        except ValueError:
+            pass
     assert fixed[0]["type"] == "lines" and fixed[1]["text"] == "เปิดทุกวัน" and fixed[2]["text"] == "ร้าน" and fixed[3]["text"] == "แมวเดินกลับบ้าน"  # a scene stays ≤ 12 s
     m = music(2.0, "bright")
     assert m.shape == (2 * SR, 2) and 0.5 < np.abs(m).max() <= 0.81 and not np.abs(music(1.0, "none")).any()
@@ -670,7 +963,10 @@ if __name__ == "__main__":
         make(storyboard({"format": "vertical", "scenes": [{"type": "cards", "text": "เมนู", "items": ["ลาเต้", "มอคค่า"], "seconds": 2}]}),
              fence, out2, size=(180, 320))
         assert os.path.getsize(out2) > 1000
-        print("VIDEO SELFTEST OK (rendered 2 videos)")
+        out3 = os.path.join(tmp, "story.mp4")  # §107 the cartoon kit loads and draws (a script error = no window.T)
+        make(script("## ห้องน้ำ กลางคืน\n(ต้น ไฟฉาย กลัว · ผี)\nต้น: *ใคร* อยู่ตรงนั้น"), fence, out3, size=(180, 320))
+        assert os.path.getsize(out3) > 1000
+        print("VIDEO SELFTEST OK (rendered 3 videos)")
     else:
         print("VIDEO SELFTEST OK (no Edge/ffmpeg: render not tested)")
     shutil.rmtree(tmp, ignore_errors=True)
