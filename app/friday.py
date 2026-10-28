@@ -54,7 +54,7 @@ import memory, rules, docsearch, tts_th, wakeword  # onnxruntime users: also aft
 import sessions, skills, documents, hardware, security, workspace, weather, reminders, media, tasks, windows, journal, voiceid
 import remote, brain, computer, project, categories, video
 
-__version__ = "0.49.0"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
+__version__ = "0.50.0"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
 OLLAMA = os.environ.get("FRIDAY_OLLAMA", "http://127.0.0.1:11434")
 MODEL = os.environ.get("FRIDAY_MODEL", "qwen3.5:4b")  # beat qwen3:8b 39/42 vs 33/42 with 1.7 GB less VRAM (PLAN §7)
 WHISPER = os.environ.get("FRIDAY_WHISPER", "large-v3-turbo")
@@ -1481,11 +1481,65 @@ def project_action(name, args):
 _video_busy, _video_cancel = threading.Lock(), threading.Event()  # §104 one video at a time · "หยุดทำวิดีโอ"
 
 
+def story_review(sb):
+    """§108 owner: "ก่อนสร้างวีดีโอให้ตรวจสอบความสมเหตุสมผลของเนื้อเรื่องก่อน" — the brain reads the story as an editor
+    (a separate call: it judges, it doesn't write). -> problems in Thai, [] when the story holds together."""
+    # the 4B editor called every story "not ok" (5/5, the good ones too): it answers yes/no questions instead, and the
+    # code decides — only what a viewer would notice sends the story back
+    schema = {"type": "object", "properties": {"going_in_circles": {"type": "boolean"}, "contradicts_itself": {"type": "boolean"},
+                                               "has_ending": {"type": "boolean"},
+                                               "problems": {"type": "array", "items": {"type": "string"}, "maxItems": 4}},
+              "required": ["going_in_circles", "contradicts_itself", "has_ending", "problems"]}
+    prompt = ("You are a story editor. Read this script for a short video story (Thai; lines are numbered by shot) and judge "
+              "only the STORY.\n\n" + video.story_text(sb) + "\n\ngoing_in_circles: true if the same event, line or feeling "
+              "comes back again and again without anything new happening. contradicts_itself: true if an event or line "
+              "contradicts an earlier one. has_ending: true if the story ends with a resolution, a twist or a clear final "
+              "beat (not just stopping). Small things (style, a weak joke) are NOT problems. problems: only for the true "
+              "issues above, short and concrete in Thai, naming the shots (e.g. \"ช็อต 12–18: …\").")
+    try:
+        r = json.loads(brain.chat([{"role": "user", "content": prompt}], schema=schema, temperature=0, source=SOURCE)["content"])
+    except Exception as e:  # no brain right now: the code checks still ran
+        print(f"  (ตรวจเนื้อเรื่องไม่ได้: {e})")
+        return []
+    if not (r.get("going_in_circles") or r.get("contradicts_itself") or not r.get("has_ending", True)):
+        return []
+    what = [w for k, w in (("going_in_circles", "เรื่องวนเวียน ไม่คืบหน้า"), ("contradicts_itself", "เหตุการณ์ขัดกันเอง")) if r.get(k)]
+    what += [] if r.get("has_ending", True) else ["ยังไม่มีตอนจบที่ชัด"]
+    return [str(x)[:200] for x in r.get("problems") or []][:4] or what
+
+
+def story_rewrite(text, issues):
+    """§108 FRIDAY fixes the story itself (measured: sent back to the 4B writer as a tool result, it stopped or forgot to
+    render 2/4 times). One call writes the whole improved script; it is used only if it still parses and repeats less."""
+    prompt = ("Rewrite this story script for a short video so the story holds together. Keep the same format (the '# ', "
+              "'ตัวละคร:', '## ', '( … )', 'บรรยาย:' and 'name [mood]:' lines), the same characters and places, and Thai. "
+              "Fix these problems:\n- " + "\n- ".join(issues) + "\nCut every repeated line or event; each scene must move the "
+              "story forward to a clear turning point and an ending. Output only the script.\n\n" + text[:6000])
+    try:
+        new = brain.chat([{"role": "user", "content": prompt}], temperature=0.4, max_tokens=4000, source=SOURCE)["content"]
+        new = re.sub(r"^```\w*\s*|\s*```\s*$", "", new.strip())
+        sb = video.script(new)
+    except Exception as e:  # no brain, or what came back isn't a script: keep the owner's/writer's version
+        print(f"  (เขียนบทใหม่ไม่ได้: {e})")
+        return None
+    return new if len(video.story_lint(sb)) <= len(video.story_lint(video.script(text))) else None
+
+
+def next_script(src):
+    """script.md -> script-2.md -> script-3.md … (the owner's own file is never overwritten)."""
+    m = re.fullmatch(r"(.*?)(?:-(\d+))?(\.md|\.txt)", src, re.I)
+    base, n, ext = (m[1], int(m[2] or 1), m[3]) if m else (src, 1, ".md")
+    while os.path.exists(project.inside(f"{base}-{n + 1}{ext}")):
+        n += 1
+    return f"{base}-{n + 1}{ext}"
+
+
 def video_render(args):
     """§104 owner: "ดู storyboard แล้วกดยืนยันธรรมดา" — the scenes are shown, a plain yes, then it renders in the
     background into a new video-<time>.mp4 (never over an old one)."""
     # no file named: the one written last of script.md / storyboard.json (review §107: an old script won over a new storyboard)
     have = [f for f in ("script.md", "storyboard.json") if os.path.isfile(project.inside(f))]
+    rewritten = None  # §108 a better story FRIDAY wrote: saved as a new file only once the owner says yes
     src = str(args.get("file") or max(have, key=lambda f: os.path.getmtime(project.inside(f)), default="storyboard.json")).strip()
     full = project.inside(src)
     if not os.path.isfile(full):
@@ -1496,6 +1550,20 @@ def video_render(args):
         except ValueError as e:
             return f"Fix {src}: {e}"
         what = video.summary(source)
+        # §108 the story is checked before anything is made: code (repeats) + the brain as an editor (does it hold together)
+        panel.send(msg={"role": "tool", "text": "🧐 ตรวจเนื้อเรื่องก่อนทำวิดีโอ…"})
+        issues = video.story_lint(source) + story_review(source)
+        if issues:  # FRIDAY rewrites it once, as a new file (the original stays), and checks again
+            panel.send(msg={"role": "tool", "text": "🧐 บทยังต้องแก้ — กำลังเขียนใหม่:\n" + "\n".join(f"• {shown(x)}" for x in issues)})
+            if new := story_rewrite(project._text(full), issues):
+                src, rewritten = next_script(src), new
+                source = video.script(new)
+                what = video.summary(source)
+                issues = video.story_lint(source) + story_review(source)
+                panel.send(msg={"role": "tool", "text": "📝 เขียนบทใหม่แล้ว" + ("" if issues else " — ผ่านการตรวจ")})
+                what = f"(บทที่แก้แล้ว จะบันทึกเป็น {src} · บทเดิมไม่ถูกแตะ)\n" + what
+        if issues:  # still not right: the owner sees what's off and decides
+            what = "⚠ ข้อสังเกตเนื้อเรื่อง: " + " · ".join(issues) + "\n\n" + what
     elif src.lower().endswith(".json"):
         try:
             source = video.storyboard(project._text(full))
@@ -1527,6 +1595,8 @@ def video_render(args):
         what = what[:1400].rsplit("\n", 1)[0] + f"\n… ทั้งหมด {len(source['scenes'])} ช็อต — บทเต็มอยู่ใน {src}"
     if not confirm(f"ทำวิดีโอในโปรเจกต์ {project.name()}?", shown(what), strong=isinstance(source, str) or UNTRUSTED.is_set()):
         return "User declined."
+    if rewritten:  # the owner said yes to the rewritten story: keep it next to theirs (before the lock — review §108)
+        project.apply_edit(project.inside(src), (rewritten, "utf-8"))
     if not _video_busy.acquire(blocking=False):  # review: taken after the question, so a failing confirm can't keep it
         return "A video is already being made. Wait for it, or the owner says 'หยุดทำวิดีโอ'."
     root, mp4 = project.ROOT, project.inside(f"video-{time.strftime('%Y%m%d-%H%M%S')}.mp4")
@@ -3092,7 +3162,23 @@ def selftest():
                 assert video_render({}) == "User declined." and "[lines] ไม่มีรูป" in made[-1]  # a made-up picture -> words
                 spath = os.path.join(d, "ดาวพระศุกร์", "script.md")  # §107 a story script is picked first when there is one
                 open(spath, "w", encoding="utf-8").write("## ห้องเรียน กลางคืน\nต้น [กลัว]: *ใคร* อยู่ตรงนั้น\n")
+                real_review, globals()["story_review"] = story_review, lambda sb: []  # the brain's editor: not in a self-test
+                real_rewrite = story_rewrite
                 assert video_render({}) == "User declined." and "ต้น: ใคร อยู่ตรงนั้น" in made[-1]
+                # §108 a story that repeats itself is rewritten by FRIDAY as script-2.md (the original stays), checked again
+                loop = "## ห้องเรียน กลางคืน\nต้น: คืนนี้คงไม่ได้นอนแล้ว\nแบงค์: เงียบไปเลย\nต้น: คืนนี้คงไม่ได้นอนแล้วล่ะ\n"
+                open(spath, "w", encoding="utf-8").write(loop)
+                globals()["story_rewrite"] = lambda text, issues: "## ห้องเรียน กลางคืน\nต้น: ได้ยินไหม\nแบงค์: เสียงประตู\n"
+                assert video_render({"file": "script.md"}) == "User declined." and "⚠" not in made[-1] and "แบงค์: เสียงประตู" in made[-1]
+                s2 = os.path.join(d, "ดาวพระศุกร์", "script-2.md")
+                assert "จะบันทึกเป็น script-2.md" in made[-1] and not os.path.exists(s2)  # a no writes nothing
+                open(s2, "w", encoding="utf-8").write("x")
+                assert open(spath, encoding="utf-8").read() == loop
+                globals()["story_rewrite"] = lambda text, issues: None  # the rewrite failed: the owner sees the notes and decides
+                assert video_render({"file": "script.md"}) == "User declined." and "⚠ ข้อสังเกตเนื้อเรื่อง: ช็อต 3" in made[-1]
+                assert next_script("script.md") == "script-3.md" and next_script("script-2.md") == "script-3.md"
+                os.remove(s2)
+                globals()["story_review"], globals()["story_rewrite"] = real_review, real_rewrite
                 os.utime(sbp, (time.time() + 5, time.time() + 5))  # review: the newer storyboard wins over an old script
                 assert video_render({}) == "User declined." and "[lines] ไม่มีรูป" in made[-1]
                 open(spath, "w", encoding="utf-8").write("# แค่ชื่อ\n")

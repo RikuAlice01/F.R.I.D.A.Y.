@@ -6,7 +6,7 @@ made here (numpy) and FRIDAY's own voice. Owner: ภาพ "สร้างข�
 Two ways in: a storyboard.json (any brain can write it) played by video_player.html, or a page the brain wrote itself
 (video.html with window.T(t)). Pages are served from 127.0.0.1 with only the project's files, and Edge has no way out
 to the network — a page written by a model can't load other files of this PC or send anything anywhere."""
-import base64, glob, http.server, io, json, os, re, shutil, socket, struct, subprocess, tempfile, threading, time, urllib.parse
+import base64, collections, difflib, glob, http.server, io, json, os, re, shutil, socket, struct, subprocess, tempfile, threading, time, urllib.parse
 import urllib.request, wave
 
 import numpy as np
@@ -281,6 +281,49 @@ def _chunks(text, n=90):
     return out + ([cur.strip()] if cur.strip() else [])
 
 
+def story_text(sb, limit=6000):
+    """§108 the story as plain lines, for the editor that reads it (no markup, one line per shot)."""
+    out, where = [], None
+    for i, s in enumerate(sb["scenes"], 1):
+        if s["type"] != "shot":
+            continue
+        here = f"## {s['place']}{' (night)' if s['time'] == 'night' else ''}"
+        if here != where:
+            out.append(here)
+            where = here
+        out.append(f"{i}. {s['speaker'] or 'บรรยาย'}: {_plain(s['text'])}")  # numbered: the editor names shots
+    text = "\n".join(out)
+    return text if len(text) <= limit else text[:limit // 2] + "\n…\n" + text[-limit // 2:]
+
+
+def story_lint(sb):
+    """§108 owner: "เนื้อเรื่อง … ดูวนเวียน" — what code can see for sure: the same line twice, one phrase coming back
+    again and again. -> problems in Thai (empty = none found)."""
+    shots = [(i, s["speaker"] or "บรรยาย", _plain(s["text"])) for i, s in enumerate(sb["scenes"], 1) if s["type"] == "shot"]
+    norm = lambda t: re.sub(r"[\s.…!?\"'“”,~\-]+", "", t)
+    problems, seen = [], []
+    for i, who, t in shots:
+        k = norm(t)
+        if len(k) < 6:
+            continue
+        if j := next((j for j, k2 in seen if difflib.SequenceMatcher(None, k, k2).ratio() >= .8), None):
+            problems.append(f"ช็อต {i} ซ้ำกับช็อต {j}: “{t[:40]}”")
+        seen.append((i, k))
+    grams = collections.Counter()
+    for _, _, t in shots:  # a phrase (10 letters) in 3+ different lines: the story keeps coming back to it
+        k = norm(t)
+        grams.update({k[a:a + 10] for a in range(max(0, len(k) - 9))})
+    said = []
+    for g, n in grams.most_common(20):
+        if n < 4 or len(said) >= 2:  # 3 is normal in a story about one thing ('ลืมส่งงาน')
+            break
+        if not any(g[:6] in x or x[:6] in g for x in said):
+            said.append(g)
+            problems.append(f"วลี “{g}…” วนกลับมา {n} ครั้ง")
+    return problems[:6]
+
+
+
 def script(text):
     """script.md -> a storyboard of shots. The format (any brain can write it, part by part):
         # ชื่อเรื่อง
@@ -327,7 +370,7 @@ def script(text):
     in_cast = False  # a "## ตัวละคร" heading with "- name: looks" lines under it (how small models write it)
     for raw in str(text).splitlines():
         line = re.sub(r"^\s*(?:[-*•]|\d+[.)])\s+", "", raw).strip()  # list bullets
-        if not line or line.startswith("<!--"):
+        if not line or line.startswith(("<!--", "![", "```", "---")):  # comments, pictures, fences: not story lines
             continue
         if m := re.match(r"#\s+(.+)", line):
             title = re.sub(r"\s*\[[^\]]*\]", "", m[1]).strip()[:80]
@@ -382,7 +425,7 @@ def script(text):
                     state[n]["pose"] = next((k for k, rx in POSES.items() if re.search(rx, rest, re.I)), state[n]["pose"])
                     state[n]["face"] = next((k for k, rx in FACES.items() if re.search(rx, rest, re.I)), state[n]["face"])
         elif (m := re.match(r"([^:：\[\(（]{1,20}?)\s*(?:[\[(（]([^\])）]{1,20})[\])）])?\s*[:：]\s*(.+)", line)) and (
-                m[1].strip() in cast or re.fullmatch(NARRATOR, m[1].strip(), re.I) or re.fullmatch(r"[^\d\s]{1,12}", m[1].strip())
+                m[1].strip() in cast or re.fullmatch(NARRATOR, m[1].strip(), re.I) or re.fullmatch(r"[^\d\s*#]{1,12}", m[1].strip())
                 and not re.fullmatch(r"หมายเหตุ|เวลา|สถานที่|ฉาก|ตอน(?:ที่)?|note|time|scene|place|https?", m[1].strip(), re.I)):
             if re.fullmatch(NARRATOR, m[1].strip(), re.I):
                 add("", m[3])
@@ -503,6 +546,8 @@ def pcm(wav_bytes):
         a = np.frombuffer(r.readframes(r.getnframes()), np.int16).astype(np.float32) / 32768
     if ch == 2:
         a = a.reshape(-1, 2).mean(1)
+    if not len(a):  # a line with nothing to say ("…", an emoji): silence, not a crash (§108 run: "array of sample points is empty")
+        return np.zeros(0, np.float32)
     a = np.interp(np.arange(0, len(a), sr / SR), np.arange(len(a)), a)
     nz = np.nonzero(np.abs(a) > 0.02)[0]
     return a[nz[0]:nz[-1] + 1] if len(nz) else a
@@ -517,6 +562,8 @@ def voice_lines(sb, tts, cancel=None):
             raise Cancelled()
         if s["say"] and sb["voice"]:
             a = pcm(tts(s["say"], s["voice"]) if s.get("voice") else tts(s["say"]))  # §107 a character's own voice
+            if not len(a):
+                continue
             s["seconds"] = round(max(s["seconds"], len(a) / SR + (0.5 if sb.get("story") else 0.8)), 2)
             s["talk0"], s["talk1"] = 0.3, 0.3 + len(a) / SR
             lines.append((s, a))
@@ -905,6 +952,14 @@ if __name__ == "__main__":
             raise AssertionError("too long accepted")
         except ValueError:
             pass
+    loop = script("## ห้องเรียน กลางคืน\nบรรยาย: ความเงียบกลับคืนมาอีกครั้ง\nต้น: ไม่รู้ แต่ฉันรู้สึกว่ามันยิ้มกับเรา\n"
+                  "บรรยาย: เสียงประตูปิดลง ความเงียบกลับคืนมาอีกครั้ง\nแบงค์: คืนนี้คงไม่ได้นอน\n"
+                  "บรรยาย: ลมพัด ความเงียบกลับคืนมาอีกครั้ง\nต้น: ไม่รู้... แต่ฉันรู้สึกว่ามันยิ้มกับเรา\n"
+                  "บรรยาย: ฝนตก ความเงียบกลับคืนมาอีกครั้ง")
+    lint = story_lint(loop)
+    assert any(p.startswith("ช็อต 6 ซ้ำกับช็อต 2") for p in lint) and any("วนกลับมา 4 ครั้ง" in p for p in lint), lint
+    assert story_lint(script("## ห้องเรียน\nบรรยาย: คืนก่อนสอบ\nต้น: ได้ยินไหม\nแบงค์: เสียงอะไร")) == []
+    assert story_text(loop).startswith("## classroom (night)\n1. บรรยาย: ความเงียบกลับคืนมาอีกครั้ง\n2. ต้น: ")
     long_line = script("## ถนน\nบรรยาย: " + "คำ " * 80)["scenes"]
     assert len(long_line) == 3 and all(len(x["text"]) <= 90 for x in long_line)  # caption-sized pieces
     for bad in ("", "# แค่ชื่อเรื่อง"):
@@ -914,6 +969,10 @@ if __name__ == "__main__":
         except ValueError:
             pass
     assert fixed[0]["type"] == "lines" and fixed[1]["text"] == "เปิดทุกวัน" and fixed[2]["text"] == "ร้าน" and fixed[3]["text"] == "แมวเดินกลับบ้าน"  # a scene stays ≤ 12 s
+    empty = io.BytesIO()
+    with wave.open(empty, "wb") as w:
+        w.setnchannels(1), w.setsampwidth(2), w.setframerate(22050)
+    assert len(pcm(empty.getvalue())) == 0  # TTS gave nothing for "…": no crash
     m = music(2.0, "bright")
     assert m.shape == (2 * SR, 2) and 0.5 < np.abs(m).max() <= 0.81 and not np.abs(music(1.0, "none")).any()
     assert "1. [title] สวัสดี — FRIDAY" in summary(sb)
