@@ -54,7 +54,7 @@ import memory, rules, docsearch, tts_th, wakeword  # onnxruntime users: also aft
 import sessions, skills, documents, hardware, security, workspace, weather, reminders, media, tasks, windows, journal, voiceid
 import remote, brain, computer, project, categories, video
 
-__version__ = "0.51.0"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
+__version__ = "0.52.0"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
 OLLAMA = os.environ.get("FRIDAY_OLLAMA", "http://127.0.0.1:11434")
 MODEL = os.environ.get("FRIDAY_MODEL", "qwen3.5:4b")  # beat qwen3:8b 39/42 vs 33/42 with 1.7 GB less VRAM (PLAN §7)
 WHISPER = os.environ.get("FRIDAY_WHISPER", "large-v3-turbo")
@@ -2850,6 +2850,24 @@ def phone_event(event, write=None):
     return True
 
 
+def reveal(path):
+    """§111 owner: "แชทที่เป็น location file ทำให้สามารถกดไปยังที่อยู่นั้นได้" — File Explorer shows the place: a file is
+    selected in its folder (never opened or run: the path came from the model's text), a folder is opened. A path
+    with words stuck on its end ("…\\video.mp4 ค่ะ") is cut back until it exists. -> what was shown, or None."""
+    p = re.sub(r"[\s.,;:!?)\]'\"”]+$", "", str(path).strip().strip('"'))
+    while p and not os.path.exists(p) and " " in p:
+        p = p.rsplit(" ", 1)[0].rstrip(".,;:!?")
+    if not p or '"' in p or not re.match(r"[A-Za-z]:\\", p) or not os.path.exists(p):
+        print(f"  (ไม่พบที่อยู่: {shown(str(path))[:120]})")
+        return None
+    p = os.path.normpath(p)
+    if os.path.isdir(p):
+        subprocess.Popen(["explorer", p], creationflags=NO_WINDOW)
+    else:
+        subprocess.Popen(f'explorer /select,"{p}"', creationflags=NO_WINDOW)
+    return p
+
+
 class Panel:
     """Glass side panel (ui.py, own process). Best effort: a missing or crashed panel never breaks FRIDAY."""
 
@@ -2889,6 +2907,8 @@ class Panel:
                 self.send(older=msgs, more=more)
             elif e.get("cmd") == "volume":
                 set_volume(e.get("value", 1.0))
+            elif e.get("cmd") == "reveal":  # §111 a path the owner clicked in the chat
+                reveal(str(e.get("path", "")))
             elif e.get("cmd") == "view":
                 try:
                     if path := image_path(str(e.get("ref", ""))):
@@ -3238,6 +3258,18 @@ def selftest():
     assert diff_brief(big).startswith("+9 −1 บรรทัด\n+ \"line0\": 0,") and diff_brief(big).endswith("… อีก 6 บรรทัด") and len(diff_brief(big)) < 160
     assert tool_label("project_read", {"path": "storyboard.json"}) == "📄 อ่าน storyboard.json" and tool_label("project_edit", {}) is None
     assert tool_label("weather", {}) == "🌤 ดูอากาศ" and tool_label("remember", {}) is None
+    with tempfile.TemporaryDirectory() as d:  # §111 a clicked path: shown in File Explorer, never opened
+        f = os.path.join(d, "วิดีโอ 2026-10-28 0940", "video-1.mp4")
+        os.makedirs(os.path.dirname(f))
+        open(f, "w").write("x")
+        real_popen, ran = subprocess.Popen, []
+        subprocess.Popen = lambda cmd, **k: ran.append(cmd)
+        try:
+            assert reveal(f + " ค่ะ") == os.path.normpath(f) and ran[-1] == f'explorer /select,"{os.path.normpath(f)}"'
+            assert reveal(os.path.dirname(f) + ".") == os.path.dirname(f) and ran[-1] == ["explorer", os.path.dirname(f)]
+            assert reveal(os.path.join(d, "ไม่มี.mp4")) is None and reveal('C:\\x" & calc') is None and len(ran) == 2
+        finally:
+            subprocess.Popen = real_popen
     assert diff_brief(big, lines=0) == "+9 −1 บรรทัด"  # §110 the line in the panel; the diff is behind "ดูรายละเอียด"
     with tempfile.TemporaryDirectory() as d:
         os.makedirs(os.path.join(d, "app"))

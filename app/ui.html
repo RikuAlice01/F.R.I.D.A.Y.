@@ -101,6 +101,7 @@
     align-self: flex-start; border-bottom-left-radius: 4px;
     border-color: rgba(62, 230, 255, .28); box-shadow: 0 0 18px rgba(62, 230, 255, .08);
   }
+  .path { color: var(--cyan); text-decoration: underline; cursor: pointer; word-break: break-all; }
   .msg.tool { align-self: center; font-size: 12px; color: var(--dim); background: none; border: none; padding: 0; max-width: 100%; }
   /* §110 "ดูรายละเอียด": the full text stays folded until asked for */
   .msg.tool .more { color: var(--cyan); cursor: pointer; text-decoration: underline; margin-left: 6px; white-space: nowrap; }
@@ -353,13 +354,28 @@
   //      model output is never parsed as HTML ----
   const IMG_MD = /!\[([^\]]*)\]\(<?([^)>]+)>?\)|!\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g;
   const IMG_PATH = /[A-Za-z]:\\[^\s"'<>|*?]+?\.(?:png|jpe?g|gif|webp|bmp)/gi;
+  // §111 a path in a reply is a link: a click shows it in File Explorer (the file is selected, never opened or run)
+  const FILE_PATH = /[A-Za-z]:\\(?:[^\\\n"<>|*?:]+\\)*[^\\\n"<>|*?:]*?\.[A-Za-z0-9]{1,6}(?![A-Za-z0-9])|[A-Za-z]:\\[^\s"<>|*?:]*/g;
+  function paths(el, text) {
+    let last = 0, m;
+    FILE_PATH.lastIndex = 0;
+    while ((m = FILE_PATH.exec(text))) {
+      if (m.index > last) el.appendChild(document.createTextNode(text.slice(last, m.index)));
+      const a = document.createElement("span");
+      a.className = "path"; a.textContent = m[0]; a.title = "คลิกเพื่อเปิดที่อยู่นี้ใน File Explorer";
+      const target = m[0];
+      a.addEventListener("click", () => post({ cmd: "reveal", path: target }));
+      el.appendChild(a); last = m.index + m[0].length;
+    }
+    if (last < text.length) el.appendChild(document.createTextNode(text.slice(last)));
+  }
   function inline(el, text) {
     for (const part of text.split(/(\*\*[^*]+\*\*|`[^`]+`)/)) {
       if (!part) continue;
       let n;
-      if (part.startsWith("**") && part.endsWith("**") && part.length > 4) { n = document.createElement("strong"); n.textContent = part.slice(2, -2); }
-      else if (part.startsWith("`") && part.endsWith("`") && part.length > 2) { n = document.createElement("code"); n.textContent = part.slice(1, -1); }
-      else n = document.createTextNode(part);
+      if (part.startsWith("**") && part.endsWith("**") && part.length > 4) { n = document.createElement("strong"); paths(n, part.slice(2, -2)); }
+      else if (part.startsWith("`") && part.endsWith("`") && part.length > 2) { n = document.createElement("code"); paths(n, part.slice(1, -1)); }
+      else { paths(el, part); continue; }
       el.appendChild(n);
     }
   }
