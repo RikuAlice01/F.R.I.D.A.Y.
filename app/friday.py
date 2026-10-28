@@ -54,7 +54,7 @@ import memory, rules, docsearch, tts_th, wakeword  # onnxruntime users: also aft
 import sessions, skills, documents, hardware, security, workspace, weather, reminders, media, tasks, windows, journal, voiceid
 import remote, brain, computer, project, categories, video
 
-__version__ = "0.50.0"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
+__version__ = "0.50.1"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
 OLLAMA = os.environ.get("FRIDAY_OLLAMA", "http://127.0.0.1:11434")
 MODEL = os.environ.get("FRIDAY_MODEL", "qwen3.5:4b")  # beat qwen3:8b 39/42 vs 33/42 with 1.7 GB less VRAM (PLAN §7)
 WHISPER = os.environ.get("FRIDAY_WHISPER", "large-v3-turbo")
@@ -253,7 +253,8 @@ def confirm(question, detail="", strong=False):
         print(f"  📱 {'อนุมัติ' if ok else 'ไม่อนุมัติ'}จากมือถือ: {question[:80]}")
         return ok
     if strong:
-        panel.send(msg={"role": "tool", "text": f"🔐 {question}" + (f"\n{detail}" if detail else "")})  # Hello shows ~200 chars
+        brief = detail if len(detail) <= 700 else detail[:700].rsplit("\n", 1)[0] + "\n…"  # §109 enough to decide, not a dump
+        panel.send(msg={"role": "tool", "text": f"🔐 {question}" + (f"\n{brief}" if detail else "")})  # Hello shows ~200 chars
         try:
             ok = security.hello(f"FRIDAY: {question} {detail}".strip()[:200])
             if ok is not None:
@@ -1421,14 +1422,28 @@ def computer_approve(what):
 _project_ok = threading.Event()  # §102 this request's Windows Hello for project edits/commands (cleared every turn)
 
 
+def diff_brief(diff, lines=3):
+    """§109 owner: "แก้ไขการแสดงผลที่ไม่จำเป็น" — a change in the panel as +added −removed and a few changed lines,
+    not the whole diff (a storyboard's JSON filled the panel twice)."""
+    rows = diff.splitlines()
+    add = [r[1:].strip() for r in rows if r.startswith("+") and not r.startswith("+++")]
+    rem = [r for r in rows if r.startswith("-") and not r.startswith("---")]
+    if not add and not rem:
+        return diff[:120]
+    peek = [f"+ {r[:60]}{'…' if len(r) > 60 else ''}" for r in add if r][:lines]
+    more = f"\n… อีก {len(add) - len(peek)} บรรทัด" if len(add) > len(peek) else ""
+    return f"+{len(add)} −{len(rem)} บรรทัด" + ("\n" + "\n".join(peek) if peek else "") + more
+
+
 def project_approve(what, detail):
     """§102 owner: "Hello ครั้งเดียวต่อคำสั่ง" — the first edit/command of a request asks Windows Hello (or the phone);
-    the rest of that request goes ahead. Every diff/command is still shown in the panel and audited."""
-    panel.send(msg={"role": "tool", "text": f"📁 {shown(what)}\n{shown(detail)[:1500]}"})
+    the rest of that request goes ahead. Every change/command is shown in the panel (in brief, §109) and audited."""
+    brief = diff_brief(detail) if detail.startswith(("---", "@@")) or "\n+" in detail else detail[:200]
     if _project_ok.is_set():
+        panel.send(msg={"role": "tool", "text": f"📁 {shown(what)} · {shown(brief)}"})
         return True
     ok = confirm(f"{shown(what)[:80]} — โปรเจกต์ {project.name()}: FRIDAY แก้ไฟล์/รันคำสั่งในโปรเจกต์นี้ได้จนจบคำสั่งนี้",
-                 shown(detail)[:300], strong=True)
+                 shown(brief)[:300], strong=True)
     if ok:
         _project_ok.set()
     return ok
@@ -1664,6 +1679,23 @@ def video_command(text, source="typed"):
         panel.send(msg={"role": "tool", "text": reply})
         print(f"  {reply}")
     return None
+
+
+TOOL_LABELS = {  # §109 what the panel says while a tool runs; None = the tool shows its own line (or nothing worth saying)
+    "project_files": "📂 ดูไฟล์ในโปรเจกต์", "project_git": "🔀 ดูการเปลี่ยนแปลง (git)", "weather": "🌤 ดูอากาศ",
+    "open": "🚀 เปิด", "media": "🎵 คุมเพลง", "window": "🪟 จัดหน้าต่าง", "read_document": "📄 อ่านเอกสาร",
+    "find_documents": "🔍 หาเอกสาร", "find_images": "🔍 หารูป", "reminder": "⏰ ตั้งเตือน", "tasks": "✅ รายการงาน",
+    "system_status": "💻 ดูสถานะเครื่อง", "hardware": "💻 สั่งเครื่อง", "computer": "🖱 ใช้แอป", "write_document": "📝 เขียนเอกสาร",
+    "pdf_tool": "📄 จัดการ PDF", "run_powershell": "⌨ รันคำสั่ง", "add_rule": "📏 เพิ่มกฎ", "save_skill": "🧩 บันทึก skill",
+    "smart_home": "🏠 สั่งอุปกรณ์ในบ้าน"}
+
+
+def tool_label(name, args):
+    if name == "project_read":
+        return f"📄 อ่าน {shown(str(args.get('path', '')))[:60]}"
+    if name == "project_search":
+        return f"🔍 ค้นหา “{shown(str(args.get('text', '')))[:40]}”"
+    return TOOL_LABELS.get(name)
 
 
 def project_sessions_dir(root):
@@ -2185,7 +2217,8 @@ def chat(history, extra=""):
             if project_local and name in PROJECT_READ | PROJECT_ACT and brain.is_cloud():
                 result = "The owner keeps this project's files on the PC: they are not sent to the cloud model."  # §102
             print(f"  [{name}] {result[:200]}")
-            panel.send(msg={"role": "tool", "text": f"⚙ {name}"})
+            if label := tool_label(name, args):  # §109 a short line in words, not the tool's name
+                panel.send(msg={"role": "tool", "text": label})
             tool_msg = {"role": "tool", "tool_name": name, "tool_call_id": call.get("id"), "content": result}
             messages.append(tool_msg)
             history.append({**tool_msg, "content": result[:600]})  # full text only for this turn: 8k context
@@ -3198,6 +3231,11 @@ def selftest():
     assert not PROJECT_QUESTION_RE.search("แก้ฟังก์ชัน add ให้รับ 3 ตัว")
     assert not PROJECT_EDIT_RE.search("อธิบายไฟล์ทดสอบ") and not PROJECT_RUN_RE.search("อธิบายไฟล์ทดสอบ") and not PROJECT_EDIT_RE.search("โปรเจกต์มีอะไรเปลี่ยนบ้าง")
     assert project_action("project_files", {}).startswith("No project is open")
+    # §109 the panel gets a brief line, not the whole diff / a tool's name
+    big = "--- a/storyboard.json\n+++ b/storyboard.json\n@@ -1,3 +1,5 @@\n-  \"title\": \"เก่า\",\n" + "".join(f"+  \"line{i}\": {i},\n" for i in range(9))
+    assert diff_brief(big).startswith("+9 −1 บรรทัด\n+ \"line0\": 0,") and diff_brief(big).endswith("… อีก 6 บรรทัด") and len(diff_brief(big)) < 160
+    assert tool_label("project_read", {"path": "storyboard.json"}) == "📄 อ่าน storyboard.json" and tool_label("project_edit", {}) is None
+    assert tool_label("weather", {}) == "🌤 ดูอากาศ" and tool_label("remember", {}) is None
     with tempfile.TemporaryDirectory() as d:
         os.makedirs(os.path.join(d, "app"))
         open(os.path.join(d, "app", "main.py"), "w", encoding="utf-8").write("x = 1\n")
