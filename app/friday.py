@@ -54,7 +54,7 @@ import memory, rules, docsearch, tts_th, wakeword  # onnxruntime users: also aft
 import sessions, skills, documents, hardware, security, workspace, weather, reminders, media, tasks, windows, journal, voiceid
 import remote, brain, computer, project, categories, video
 
-__version__ = "0.46.0"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
+__version__ = "0.47.0"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
 OLLAMA = os.environ.get("FRIDAY_OLLAMA", "http://127.0.0.1:11434")
 MODEL = os.environ.get("FRIDAY_MODEL", "qwen3.5:4b")  # beat qwen3:8b 39/42 vs 33/42 with 1.7 GB less VRAM (PLAN §7)
 WHISPER = os.environ.get("FRIDAY_WHISPER", "large-v3-turbo")
@@ -1037,6 +1037,45 @@ def forget_phone(dev_id):
 def set_morning_greet(on):
     with security.own_write(rules.SETTINGS):
         rules.set_setting("morning_greet", bool(on))
+
+
+def panel_screen_name(choice):
+    if choice == "mouse":
+        return "จอที่เมาส์อยู่"
+    ss = windows.screens()
+    i = next((i for i, s in enumerate(ss) if s["name"] == choice), None)
+    return f"จอ {i + 1}" if i is not None else "จอหลัก"
+
+
+def set_panel_screen(where):
+    """§105 owner: "เพิ่ม option เปลี่ยนหน้าจอที่แสดง drawer chat ได้กรณีผู้ใช้มีมากกว่า 1 จอ". where = "primary" ·
+    "mouse" · "1".."9" (left to right, like moving windows) · a device name. Undo-able, so no question."""
+    ss = windows.screens()
+    if str(where).isdigit():
+        i = int(where) - 1
+        if not 0 <= i < len(ss):
+            return f"มีแค่ {len(ss)} จอค่ะ" if len(ss) > 1 else "เครื่องนี้มีจอเดียวค่ะ"
+        where = ss[i]["name"]
+    elif where not in ("primary", "mouse") and where not in [s["name"] for s in ss]:
+        return "ไม่พบจอนั้นค่ะ"
+    with security.own_write(rules.SETTINGS):
+        rules.set_setting("panel_monitor", where)
+    panel._write({"screen": where})  # straight to the panel, a phone turn too
+    return f"ย้ายแผงแชตไป{panel_screen_name(where)}แล้วค่ะ"
+
+
+_SCREEN = r"(?:แผง(?:แชต|แชท)?|หน้าต่างแชต|drawer|chat panel|panel)"
+PANEL_SCREEN_RE = re.compile(r"\W*(?:ย้าย|เปลี่ยน|เอา|ให้)?\s*" + _SCREEN + r"\s*(?:ไป|มา|ไว้|อยู่|แสดง)?\s*(?:ที่|บน|ใน)?\s*"
+                             r"(?:จอ(?:ที่)?\s*(?P<n>\d)|(?P<main>จอหลัก)|(?P<mouse>(?:จอ)?(?:ที่)?(?:ตาม)?เมาส์(?:อยู่)?))"
+                             r"(?:\s*(?:หน่อย|ให้หน่อย|ด้วย|ค่ะ|คะ|ครับ|นะ))*[\s.!?]*"
+                             r"|\W*(?:move|put|show) (?:the )?" + _SCREEN + r" (?:to|on) (?:(?:screen|monitor|display) (?P<en>\d)|"
+                             r"(?P<enmain>the main (?:screen|monitor|display))|(?P<enmouse>the (?:screen|monitor) with the mouse))\W*", re.I)
+
+
+def panel_screen_command(text):
+    if not (m := PANEL_SCREEN_RE.fullmatch(text)):
+        return None
+    return set_panel_screen(m["n"] or m["en"] or ("mouse" if m["mouse"] or m["enmouse"] else "primary"))
 
 
 def window_action(action, app="", where=""):
@@ -2695,7 +2734,7 @@ class Panel:
         threading.Thread(target=self._read, daemon=True).start()
         msgs, more = SESS.page(0, UI_PAGE)
         self.send(sessions=SESS.tree(), reset=msgs, more=more, volume=volume(), brain=brain.label() if brain.is_cloud() else "",
-                  project=project_badge())
+                  project=project_badge(), screen=rules.settings().get("panel_monitor", "primary"))  # §105
 
     def _read(self):
         """What the user does in the interactive panel: typed messages and session buttons."""
@@ -2967,6 +3006,24 @@ def selftest():
     assert NEWCAT_RE.fullmatch("สร้างหมวดใหม่ ชื่อ บทพากย์ YouTube กฎ เขียนสั้น กระชับ")[1] == "บทพากย์ YouTube"
     assert SETCAT_RE.fullmatch("ตั้งหมวดโปรเจกต์เป็นนิยาย")[1] == "นิยาย" and SETCAT_RE.fullmatch("เปลี่ยนหมวดเป็น การตลาด หน่อย")[1] == "การตลาด"
     assert LISTCAT_RE.fullmatch("มีหมวดอะไรบ้าง") and DELCAT_RE.fullmatch("ลบหมวด บทพากย์ YouTube")[1] == "บทพากย์ YouTube"
+    # §105 the chat panel's monitor
+    for t, want in (("ย้ายแผงไปจอ 2", "2"), ("ย้ายแผงแชตไปจอที่ 1 หน่อย", "1"), ("แผงแชตไปจอหลัก", "primary"), ("ให้แผงอยู่จอที่เมาส์อยู่", "mouse"),
+                    ("ย้ายแผงตามเมาส์", "mouse"), ("move the chat panel to screen 2", "2"), ("put the panel on the main monitor", "primary")):
+        m = PANEL_SCREEN_RE.fullmatch(t)
+        assert m and (m["n"] or m["en"] or ("mouse" if m["mouse"] or m["enmouse"] else "primary")) == want, t
+    for t in ("ย้ายหน้าต่าง chrome ไปจอ 2", "แผงวงจร", "จอ 2 ความละเอียดเท่าไหร่"):
+        assert not PANEL_SCREEN_RE.fullmatch(t), t
+    real_set, sent = rules.set_setting, []
+    real_write = globals()["panel"]._write
+    try:
+        rules.set_setting, globals()["panel"]._write = (lambda *a, **k: sent.append(a)), (lambda e: sent.append(e))
+        n = len(windows.screens())
+        assert set_panel_screen("mouse") == "ย้ายแผงแชตไปจอที่เมาส์อยู่แล้วค่ะ" and sent[-2] == ("panel_monitor", "mouse") and sent[-1] == {"screen": "mouse"}
+        assert set_panel_screen(str(n + 1)).startswith(("มีแค่", "เครื่องนี้มีจอเดียว")) and len(sent) == 2
+        assert set_panel_screen("1").startswith("ย้ายแผงแชตไปจอ 1") and sent[-1]["screen"] == windows.screens()[0]["name"]
+        assert set_panel_screen(r"\\.\NOPE") == "ไม่พบจอนั้นค่ะ"
+    finally:
+        rules.set_setting, globals()["panel"]._write = real_set, real_write
     assert not SETCAT_RE.fullmatch("หมวดนี้ดีไหม") and not CREATE_PROJECT_RE.fullmatch("โปรเจกต์มีอะไรเปลี่ยนบ้าง")
     assert not CREATE_PROJECT_RE.fullmatch("create a new file in this project") and CREATE_PROJECT_RE.fullmatch("start a novel project")
     with tempfile.TemporaryDirectory() as d:
@@ -3420,7 +3477,7 @@ def _turn(history, text):
                 panel.send(state="speaking")
                 say(reply)
             return
-        if (reply := video_command(text, SOURCE)) is not None or (reply := category_command(text, SOURCE)) is not None or (reply := project_command(text, SOURCE)) is not None:  # §103 §102
+        if (reply := panel_screen_command(text)) is not None or (reply := video_command(text, SOURCE)) is not None or (reply := category_command(text, SOURCE)) is not None or (reply := project_command(text, SOURCE)) is not None:  # §103 §102
             print(f"FRIDAY> {reply}")
             panel.send(msg={"role": "user", "text": text})
             panel.send(msg={"role": "assistant", "text": reply})
@@ -3718,6 +3775,13 @@ def start_tray(history):
         item("เปิดไมค์ (ถ้าสั่งปิดไว้)", bg(hardware_action, "mic_on")),
         item("ทักทายตอนเช้า", bg(lambda: set_morning_greet(not rules.settings().get("morning_greet", True))),
              checked=lambda _: rules.settings().get("morning_greet", True)),
+        item(lambda _: f"จอของแผงแชต ({panel_screen_name(rules.settings().get('panel_monitor', 'primary'))})", pystray.Menu(lambda: [  # §105
+            item("จอหลัก", bg(set_panel_screen, "primary"), checked=lambda _: rules.settings().get("panel_monitor", "primary") == "primary", radio=True),
+            item("จอที่เมาส์อยู่", bg(set_panel_screen, "mouse"), checked=lambda _: rules.settings().get("panel_monitor") == "mouse", radio=True),
+            pystray.Menu.SEPARATOR,
+            *[item(f"จอ {i + 1} · {s['size'][0]}×{s['size'][1]}" + (" (หลัก)" if s["primary"] else ""), bg(set_panel_screen, s["name"]),
+                   checked=(lambda n: lambda _: rules.settings().get("panel_monitor") == n)(s["name"]), radio=True)
+              for i, s in enumerate(windows.screens())]])),
         item("สมอง", pystray.Menu(brain_items)),  # §84
         item("มือถือ", pystray.Menu(lambda: [  # §70
             item("จับคู่มือถือ… (แสดง QR)", bg(show_pair_qr)),

@@ -110,7 +110,50 @@ def move_to(hwnd, where, monitors):
     return True
 
 
+class _MonitorInfo(ctypes.Structure):
+    _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT), ("rcWork", wintypes.RECT),
+                ("dwFlags", wintypes.DWORD), ("szDevice", wintypes.WCHAR * 32)]
+
+
+def _info(hmon):
+    mi = _MonitorInfo()
+    mi.cbSize = ctypes.sizeof(mi)
+    u.GetMonitorInfoW(hmon, ctypes.byref(mi))
+    w, m = mi.rcWork, mi.rcMonitor
+    return {"name": mi.szDevice, "primary": bool(mi.dwFlags & 1), "work": (w.left, w.top, w.right, w.bottom),
+            "size": (m.right - m.left, m.bottom - m.top)}
+
+
+def screens():
+    """§105 every monitor, left to right (= "จอ 1, จอ 2 …" like move_to): {name, primary, work (minus taskbar), size}."""
+    out = []
+    cb = ctypes.WINFUNCTYPE(ctypes.c_int, wintypes.HMONITOR, wintypes.HDC, ctypes.POINTER(wintypes.RECT), wintypes.LPARAM)
+    u.EnumDisplayMonitors(None, None, cb(lambda h, *_: out.append(_info(h)) or 1), 0)
+    return sorted(out, key=lambda m: m["work"][0])
+
+
+def screen_at_cursor():
+    p = wintypes.POINT()
+    u.GetCursorPos(ctypes.byref(p))
+    return _info(u.MonitorFromPoint(p, 2))  # MONITOR_DEFAULTTONEAREST
+
+
+def panel_screen(choice, all_screens=None):
+    """§105 where the chat panel goes: "primary" (default) · "mouse" (the screen the pointer is on) · a device name
+    (\\\\.\\DISPLAY2). A screen that is gone (unplugged) -> the primary one."""
+    if choice == "mouse":
+        return screen_at_cursor()
+    ss = all_screens if all_screens is not None else screens()
+    return next((s for s in ss if s["name"] == choice), None) or next((s for s in ss if s["primary"]), ss[0] if ss else None)
+
+
 if __name__ == "__main__":
+    ss = screens()
+    assert ss and sum(s["primary"] for s in ss) == 1 and all(s["work"][2] > s["work"][0] for s in ss)
+    fake = [{"name": "A", "primary": False, "work": (-1920, 0, 0, 1032)}, {"name": "B", "primary": True, "work": (0, 0, 1920, 1032)}]
+    assert panel_screen("A", fake)["name"] == "A" and panel_screen("primary", fake)["name"] == "B"
+    assert panel_screen(r"\\.\DISPLAY9", fake)["name"] == "B" and panel_screen("mouse")["name"] in [s["name"] for s in ss]
+    print("screens:", [(s["name"], s["work"], "primary" if s["primary"] else "") for s in ss])
     fake = [(1, "friday - Visual Studio Code", "code.exe"), (2, "Khalid - Better - YouTube - Brave", "brave.exe"),
             (3, "Downloads", "explorer.exe")]
     assert find("vscode", fake)[0] == 1 and find("youtube", fake)[0] == 2 and find("brave", fake)[0] == 2

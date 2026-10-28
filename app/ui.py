@@ -13,6 +13,8 @@ from ctypes import wintypes
 
 import webview
 
+import windows
+
 WIDTH = float(os.environ.get("FRIDAY_UI_WIDTH", "0.20"))  # fraction of the screen width
 IDLE_HIDE_S = float(os.environ.get("FRIDAY_UI_HIDE_S", "15"))
 INTERACTIVE_HIDE_S = 180
@@ -85,6 +87,7 @@ class Panel:
         self.lock = threading.Lock()
         self.interactive, self.active_at = False, 0.0
         self.refresh = threading.Event()
+        self.screen, self.geo = "primary", None  # §105 which monitor (friday.py sends settings "panel_monitor") · where it is now
 
     def setup(self):
         for _ in range(300):  # native form exists only once the window is shown (it starts off-screen, not hidden)
@@ -123,15 +126,30 @@ class Panel:
         log("setup done")
 
     def _geometry(self):
-        left, top, right, bottom = work_area()
+        try:
+            s = windows.panel_screen(self.screen)
+            left, top, right, bottom = s["work"] if s else work_area()
+        except Exception as ex:  # never lose the panel over a monitor query
+            log(f"screen: {ex}")
+            left, top, right, bottom = work_area()
         width = int((right - left) * WIDTH)
         return right, top, width, bottom - top
+
+    def move_screen(self, choice):
+        """§105 another monitor: slide out where it is, back in on the new one."""
+        was = self.shown
+        if was:
+            self.slide(False)
+        self.screen = choice
+        if was:
+            self.slide(True)
 
     def slide(self, show):
         with self.lock:
             if show == self.shown or not self.hwnd:
                 return
-            right, top, width, height = self._geometry()
+            # in: on the chosen screen now ("mouse" = wherever the pointer is) · out: from where it is
+            right, top, width, height = self.geo = self._geometry() if show or not self.geo else self.geo
             if show:
                 user32.ShowWindow(self.hwnd, 5 if self.interactive else SW_SHOWNOACTIVATE)  # 5 = SW_SHOW
             t0 = time.perf_counter()
@@ -180,6 +198,8 @@ class Panel:
         self.w.evaluate_js(f"window.friday && friday.event({json.dumps(e, ensure_ascii=False)})")
 
     def handle(self, e):
+        if "screen" in e:
+            self.move_screen(str(e["screen"]))
         if "open" in e:
             self.set_interactive(not self.interactive if e["open"] == "toggle" else bool(e["open"]))
         self.active_at = time.time()
