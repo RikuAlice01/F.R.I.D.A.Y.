@@ -52,9 +52,9 @@ import numpy as np, psutil, requests, sounddevice as sd
 from faster_whisper import WhisperModel  # must load (ctranslate2 DLLs) before winrt, or model init access-violates
 import memory, rules, docsearch, tts_th, wakeword  # onnxruntime users: also after faster_whisper
 import sessions, skills, documents, hardware, security, workspace, weather, reminders, media, tasks, windows, journal, voiceid
-import remote, brain, computer, project, categories
+import remote, brain, computer, project, categories, video
 
-__version__ = "0.45.0"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
+__version__ = "0.46.0"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
 OLLAMA = os.environ.get("FRIDAY_OLLAMA", "http://127.0.0.1:11434")
 MODEL = os.environ.get("FRIDAY_MODEL", "qwen3.5:4b")  # beat qwen3:8b 39/42 vs 33/42 with 1.7 GB less VRAM (PLAN §7)
 WHISPER = os.environ.get("FRIDAY_WHISPER", "large-v3-turbo")
@@ -217,8 +217,17 @@ PROJECT_TOOLS = [
                                              "The owner approves.",
         "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
 ]
+PROJECT_TOOLS.append({"type": "function", "function": {  # §104 the brag way: CSS + JS frames, captured, music + voice
+    "name": "video_render", "description":
+        "Make an mp4 video in the open project from storyboard.json (write it first with project_edit). Storyboard: "
+        '{"title": "...", "format": "landscape|vertical|square", "tone": "default|polished|cinematic|chaotic|deadpan|app-store|dark", '
+        '"mood": "bright|calm|epic|none", "scenes": [{"type": "title|lines|cards|stat|quote|image|outro", "text": "main words", '
+        '"sub": "smaller line", "items": ["for lines/cards/outro button"], "image": "picture.jpg in the project (image scenes)", '
+        '"say": "voice-over line", "seconds": 3}]}. stat text = a number like "1,200+". Or file = a page with window.T(t) '
+        "(then seconds is needed). The owner sees the scenes and approves; it renders in the background.",
+    "parameters": {"type": "object", "properties": {"file": {"type": "string"}, "seconds": {"type": "number"}, "mood": {"type": "string"}}}}})
 PROJECT_READ = {"project_files", "project_read", "project_search", "project_git"}
-PROJECT_ACT = {"project_edit", "project_run"}
+PROJECT_ACT = {"project_edit", "project_run", "video_render"}
 
 
 _call = threading.local()  # per tool call: .approved (the untrusted-content gate already said yes)
@@ -1412,6 +1421,8 @@ def project_action(name, args):
             if not project_approve("รันคำสั่ง", cmd):
                 return "User declined."
             return project.run(cmd)
+        if name == "video_render":
+            return video_render(args)
     except project.OutsideProject as e:
         return f"Blocked: {e}"
     except subprocess.TimeoutExpired:
@@ -1419,6 +1430,101 @@ def project_action(name, args):
     except (ValueError, OSError, RuntimeError) as e:
         return f"Failed: {e}"
     return f"Unknown tool {name}"
+
+
+_video_busy, _video_cancel = threading.Lock(), threading.Event()  # §104 one video at a time · "หยุดทำวิดีโอ"
+
+
+def video_render(args):
+    """§104 owner: "ดู storyboard แล้วกดยืนยันธรรมดา" — the scenes are shown, a plain yes, then it renders in the
+    background into a new video-<time>.mp4 (never over an old one)."""
+    src = str(args.get("file") or "storyboard.json").strip()
+    full = project.inside(src)
+    if not os.path.isfile(full):
+        return f"Failed: {src} does not exist in the project — write it first with project_edit (old = '')."
+    if src.lower().endswith(".json"):
+        try:
+            source = video.storyboard(project._text(full))
+        except ValueError as e:  # JSONDecodeError too
+            return f"Fix {src}: {e}"
+        for s in source["scenes"]:  # a picture the model made up: show the words instead of failing the whole video
+            if s["image"] and not os.path.isfile(project.inside(s["image"])):
+                s.update(type="lines", image="", text=s["text"] or s["say"][:160] or source["title"])
+        if args.get("mood") in video.MOODS:
+            source["mood"] = args["mood"]
+        what = video.summary(source)
+    elif src.lower().endswith((".html", ".htm")):
+        try:
+            seconds = float(args.get("seconds") or 0)
+        except (TypeError, ValueError):
+            seconds = 0
+        if not 1 <= seconds <= video.MAX_S:
+            return f"Give seconds (1-{video.MAX_S}): how long {src} runs."
+        source, what = project.rel(full), f"{project.rel(full)} · {seconds:.0f} วิ · หน้าเว็บที่เขียนเอง (ไม่มีเครือข่าย)"
+    else:
+        return "Failed: file must be a storyboard .json or a page .html with window.T(t)."
+    if not video.ffmpeg():
+        return f"ffmpeg is not installed. Tell the owner to install it with: {video.INSTALL_FFMPEG} — then try again."
+    if _video_busy.locked():
+        return "A video is already being made. Wait for it, or the owner says 'หยุดทำวิดีโอ'."
+    # a page the model wrote is code (sandboxed, but code): Windows Hello for it, and for anything after reading
+    # text from outside this turn (review §104); a storyboard is data — a plain yes (owner)
+    if not confirm(f"ทำวิดีโอในโปรเจกต์ {project.name()}?", shown(what)[:900], strong=isinstance(source, str) or UNTRUSTED.is_set()):
+        return "User declined."
+    if not _video_busy.acquire(blocking=False):  # review: taken after the question, so a failing confirm can't keep it
+        return "A video is already being made. Wait for it, or the owner says 'หยุดทำวิดีโอ'."
+    root, mp4 = project.ROOT, project.inside(f"video-{time.strftime('%Y%m%d-%H%M%S')}.mp4")
+
+    def fence(rel):  # the project of this video, even if the owner opens another one meanwhile
+        if project.ROOT != root:
+            raise project.OutsideProject("another project is open now")
+        return project.inside(rel)
+
+    def run():
+        shown_at = [-1]
+
+        def step(f, m):
+            if int(f * 4) > shown_at[0]:
+                shown_at[0] = int(f * 4)
+                panel.send(msg={"role": "tool", "text": f"🎬 {int(f * 100)}% · {m}"})
+        try:
+            _video_cancel.clear()
+            out, secs = video.make(source, fence, mp4, tts=tts_wav, seconds=args.get("seconds"), mood=args.get("mood") or "bright",
+                                   progress=step, cancel=_video_cancel)
+            security.audit(SOURCE, "video_render", out, "done")
+            phone_alert(f"วิดีโอเสร็จแล้ว: {os.path.basename(out)} ({secs:.0f} วิ) ในโปรเจกต์ {os.path.basename(root)}")
+        except video.Cancelled:
+            phone_alert("หยุดทำวิดีโอแล้วค่ะ")
+        except Exception as e:  # Edge/ffmpeg/page errors: say what broke so the page or storyboard can be fixed
+            security.audit(SOURCE, "video_render", mp4, "error", str(e)[:200])
+            phone_alert(f"ทำวิดีโอไม่สำเร็จ — {e}")
+        finally:
+            _video_busy.release()
+    threading.Thread(target=run, daemon=True).start()
+    return (f"Started: rendering {os.path.basename(mp4)} in the background (progress in the panel). Tell the owner it has "
+            "started and that they will be told when it is done.")
+
+
+VIDEO_STOP_RE = re.compile(r"\W*(?:หยุด|ยกเลิก)\s*(?:ทำ|สร้าง)?\s*(?:วิดีโอ|วีดีโอ|วีดิโอ|คลิป)\W*|\W*(?:stop|cancel) (?:the )?video\W*", re.I)
+VIDEO_MAKE_RE = re.compile(r"\W*(?:ช่วย)?\s*(?:ทำ|สร้าง)\s*(?:วิดีโอ|วีดีโอ|วีดิโอ|คลิป)(?!\s*(?:คอล|call|โปรเจ[กค]ต์|หมวด))"
+                           r"|\W*(?:make|create)\s+(?:a\s+)?(?:\w+\s+)?video\b(?!\s+(?:call|chat|project|category))", re.I)  # review §104
+
+
+def video_command(text, source="typed"):
+    """§104 "หยุดทำวิดีโอ" · "ทำวิดีโอ…" with no project open -> a new project in the video category first (owner:
+    เก็บใน "โปรเจกต์หมวด วิดีโอ"); the request itself then goes on to the brain inside it."""
+    if VIDEO_STOP_RE.fullmatch(text):
+        if not _video_busy.locked():
+            return "ไม่ได้ทำวิดีโออยู่ค่ะ"
+        _video_cancel.set()
+        return "กำลังหยุดทำวิดีโอค่ะ"
+    if VIDEO_MAKE_RE.match(text) and not project.ROOT:
+        reply = create_project(f"วิดีโอ {time.strftime('%Y-%m-%d %H%M')}", "video", source)
+        if not project.ROOT:
+            return reply
+        panel.send(msg={"role": "tool", "text": reply})
+        print(f"  {reply}")
+    return None
 
 
 def project_sessions_dir(root):
@@ -1484,8 +1590,8 @@ def project_close(source="typed"):
 PROJECT_QUESTION_RE = re.compile(r"อธิบาย|ทำไม|อะไร|ยังไง|อย่างไร|ไหม|มั้ย|หรือเปล่า|\?|\b(?:what|why|how|explain|does|is it|should)\b", re.I)
 PROJECT_OPEN_RE = re.compile(r"\W*(?:(?:เปิด|ไปที่|สลับไป(?:ที่)?)\s*โปรเจ[กค]ต์|open (?:the )?project|switch to project|/project)"
                              r"\s*(.+?)(?:\s*(?:หน่อย|ให้หน่อย|ค่ะ|คะ|ครับ|นะ))*[\s.!?]*", re.I)  # Thai marks are \W
-PROJECT_EDIT_RE = re.compile(r"แก้|เพิ่ม(?:ฟังก์ชัน|โค้ด|บรรทัด|ไฟล์)|เปลี่ยน(?:ให้|เป็น|ชื่อ)|ลบ(?:บรรทัด|ฟังก์ชัน|โค้ด)|เขียน|ร่าง|วางแผน|สร้างไฟล์|"
-                             r"\b(?:fix|change|edit|add|rename|refactor|create (?:a )?file|write|draft|plan)\b", re.I)  # §103 writing categories
+PROJECT_EDIT_RE = re.compile(r"แก้|เพิ่ม(?:ฟังก์ชัน|โค้ด|บรรทัด|ไฟล์)|เปลี่ยน(?:ให้|เป็น|ชื่อ)|ลบ(?:บรรทัด|ฟังก์ชัน|โค้ด)|เขียน|ร่าง|วางแผน|สร้างไฟล์|(?:ทำ|สร้าง)\s*(?:วิดีโอ|วีดีโอ|วีดิโอ|คลิป)|"
+                             r"\b(?:fix|change|edit|add|rename|refactor|create (?:a )?file|write|draft|plan|make (?:a )?(?:\w+ )?video)\b", re.I)  # §103 · §104
 PROJECT_RUN_RE = re.compile(r"รัน|บิลด์|คอมไพล์|\b(?:run|build|compile)\b", re.I)
 PROJECT_CLOSE_RE = re.compile(r"\W*(?:(?:ออกจาก|ปิด)\s*โปรเจ[กค]ต์(?:นี้)?|close (?:the )?project|leave (?:the )?project|/project\s+off)"
                               r"(?:\s*(?:หน่อย|ค่ะ|คะ|ครับ|นะ))*\W*", re.I)
@@ -1904,7 +2010,7 @@ def chat(history, extra=""):
     messages = [{"role": "system", "content": system}] + window
     if shot and messages[-1].get("role") == "user":  # the picture rides on this turn only; history keeps the text
         messages[-1] = {**messages[-1], "images": [shot[2]]}
-    told = nudged = False
+    told, nudged = False, set()  # nudged: tools already asked for once
     for _ in range(8):  # max tool rounds per turn (multi-step memory lookups need several)
         msg = brain.chat(messages, tools=tools, temperature=TEMPERATURE, source=SOURCE)  # §84 local or cloud brain
         if STOP.is_set():  # pressed while the model was thinking: its answer (and any tool it asked for) is dropped
@@ -1916,11 +2022,12 @@ def chat(history, extra=""):
         messages.append(msg)  # this turn: the cloud's own blocks go back unchanged
         # §102 a small model reads the file, says "I'll change it" and stops: when the request asks for an edit/run that
         # no tool did yet, ask once more for the tool call (this nudge stays out of the saved history)
-        want = project.ROOT and not project_local and not msg.get("tool_calls") and not nudged and not PROJECT_QUESTION_RE.search(user) and next(
-            (t for t, rx in (("project_edit", PROJECT_EDIT_RE), ("project_run", PROJECT_RUN_RE)) if rx.search(user)
+        want = project.ROOT and not project_local and not msg.get("tool_calls") and not PROJECT_QUESTION_RE.search(user) and next(
+            (t for t, rx in (("project_edit", PROJECT_EDIT_RE), ("project_run", PROJECT_RUN_RE), ("video_render", VIDEO_MAKE_RE))
+             if rx.search(user) and t not in nudged and len(nudged) < 2  # review: at most two extra rounds a turn
              and not any(c["function"]["name"] == t for m in messages if m.get("tool_calls") for c in m["tool_calls"])), None)
         if want:
-            nudged = True
+            nudged.add(want)
             messages.append({"role": "user", "content": f"You have not called {want} yet. Call it now to actually do what I asked "
                                                         "(do not just describe it)."})
             continue
@@ -2882,6 +2989,24 @@ def selftest():
             t = open(fmd, encoding="utf-8").read()
             assert categories.current(t) == "study" and "กฎของฉันเอง" in t and t.count("friday:category:start") == 1
             assert project_badge() == "📁 ดาวพระศุกร์ · เรียน/ติว" and made.count(True) == 4
+            # §104 video: bad storyboards come back as fixes, nothing starts; a plain (not Hello) yes before rendering
+            sbp = os.path.join(d, "ดาวพระศุกร์", "storyboard.json")
+            open(sbp, "w", encoding="utf-8").write('{"scenes": [{"type": "boom"}]}')
+            assert video_render({}).startswith("Fix storyboard.json: scene 1") and video_render({"file": "x.json"}).startswith("Failed")
+            assert video_render({"file": "FRIDAY.md"}).startswith("Failed: file must be")
+            open(sbp, "w", encoding="utf-8").write('{"scenes": [{"type": "title", "text": "ทดสอบ"}]}')
+            made.clear()
+            globals()["confirm"] = lambda *a, **k: made.append(k.get("strong", False)) and False
+            if video.ffmpeg():
+                assert video_render({}) == "User declined." and made == [False] and not _video_busy.locked()
+                open(sbp, "w", encoding="utf-8").write('{"scenes": [{"type": "image", "image": "none.jpg", "text": "ไม่มีรูป"}]}')
+                globals()["confirm"] = lambda q, d="", **k: made.append(d) and False
+                assert video_render({}) == "User declined." and "[lines] ไม่มีรูป" in made[-1]  # a made-up picture -> words
+            assert video_command("หยุดทำวิดีโอ") == "ไม่ได้ทำวิดีโออยู่ค่ะ" and video_command("ทำวิดีโอโปรโมทร้าน") is None  # a project is open
+            assert VIDEO_MAKE_RE.match("ช่วยทำวิดีโอโปรโมทร้านกาแฟ") and VIDEO_MAKE_RE.match("make a promo video for my app")
+            assert not VIDEO_MAKE_RE.match("วิดีโอนี้ยาวเท่าไหร่") and VIDEO_STOP_RE.fullmatch("stop the video")
+            for t in ("create a video project called Shop", "make a video call to mom", "ทำวิดีโอคอลหาแม่", "สร้างวิดีโอโปรเจกต์ใหม่"):
+                assert not VIDEO_MAKE_RE.match(t), t
         finally:
             globals()["confirm"], PROJECTS_HOME, rules.set_setting = real_c, real_home, real_set
             project.close_project()
@@ -3295,7 +3420,7 @@ def _turn(history, text):
                 panel.send(state="speaking")
                 say(reply)
             return
-        if (reply := category_command(text, SOURCE)) is not None or (reply := project_command(text, SOURCE)) is not None:  # §103 §102
+        if (reply := video_command(text, SOURCE)) is not None or (reply := category_command(text, SOURCE)) is not None or (reply := project_command(text, SOURCE)) is not None:  # §103 §102
             print(f"FRIDAY> {reply}")
             panel.send(msg={"role": "user", "text": text})
             panel.send(msg={"role": "assistant", "text": reply})

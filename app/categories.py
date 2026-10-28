@@ -35,6 +35,15 @@ BUILTIN = {
               "- Write chapters as chapters/NN.md; keep point of view, tense, voice and names consistent.\n"
               "- Natural, vivid Thai prose (unless told otherwise); show, don't tell; varied sentence rhythm.\n"
               "- Ask before big plot changes; never overwrite a chapter without saying so."),
+    "video": ("ทำวิดีโอ", "Video", r"วิดีโอ|วีดีโอ|วีดิโอ|คลิป|video|promo|โปรโมท",  # §104, after the /brag skill
+              "You direct short promo and story videos (motion graphics, music, FRIDAY's voice).\n"
+              "- Plan first: hook (first 2-3 s), reveal, 2-3 highlights, punchline/outro. Promo 15-30 s; a story may be longer.\n"
+              "- Write storyboard.json with project_edit (old = ''), then call video_render. The owner sees the scenes and says yes.\n"
+              "- Specific, not generic: the project's own names, words and facts; never invent numbers, reviews or claims.\n"
+              "- Few words per scene, readable (~0.3 s a word); 'say' = one short spoken line per scene.\n"
+              "- Pick a tone that fits: default, polished, cinematic, chaotic, deadpan, app-store, dark.\n"
+              "- A strong brain may instead write video.html: every frame drawn by window.T(seconds), no network, then\n"
+              "  video_render with file = video.html and seconds."),
     "docs": ("ทำเอกสาร/รายงาน", "Documents & reports", r"เอกสาร|รายงาน|report|document|proposal|ข้อเสนอ",
              "You write clear documents and reports.\n"
              "- Agree on the audience, purpose and length first.\n"

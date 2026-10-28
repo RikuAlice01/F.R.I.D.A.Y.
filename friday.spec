@@ -14,7 +14,7 @@ _find = _bm.find_binary_dependencies
 _bm.find_binary_dependencies = lambda binaries, packages, *rest: _find(
     binaries, [p for p in packages if os.path.isdir(os.path.join(SITE, p.split(".")[0] + ".libs"))], *rest)
 
-datas, binaries, hidden = [("app/ui.html", ".")], [], []
+datas, binaries, hidden = [("app/ui.html", "."), ("app/video_player.html", "."), ("app/fonts", "fonts")], [], []
 for pkg in ("ctranslate2", "faster_whisper", "onnxruntime", "sherpa_onnx", "openwakeword", "webview",
             "pystray", "winrt", "clr_loader", "pythonnet", "docx", "pptx", "openpyxl", "pypdf",
             "sounddevice", "_sounddevice_data", "monitorcontrol", "comtypes", "pycaw", "qrcode",
@@ -34,7 +34,7 @@ for dll in glob.glob(os.path.join(site, "nvidia", "*", "bin", "*.dll")):  # cuBL
 # modules friday.py imports by name at run time
 hidden += ["ui", "tts_th", "memory", "rules", "docsearch", "wakeword", "sessions", "skills", "documents", "hardware",
            "security", "workspace", "weather", "reminders", "media", "tasks", "windows", "journal", "voiceid",
-           "remote", "brain", "brain_claude", "brain_openai", "computer", "project", "categories"]
+           "remote", "brain", "brain_claude", "brain_openai", "computer", "project", "categories", "video"]
 
 a = Analysis(["app/friday.py"], pathex=["app"], datas=datas, binaries=binaries, hiddenimports=hidden,
              excludes=["torch", "tensorflow", "matplotlib", "IPython", "pytest"])
