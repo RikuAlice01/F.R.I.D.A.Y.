@@ -54,7 +54,7 @@ import memory, rules, docsearch, tts_th, wakeword  # onnxruntime users: also aft
 import sessions, skills, documents, hardware, security, workspace, weather, reminders, media, tasks, windows, journal, voiceid
 import remote, brain, computer, project, categories, video
 
-__version__ = "0.50.1"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
+__version__ = "0.51.0"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
 OLLAMA = os.environ.get("FRIDAY_OLLAMA", "http://127.0.0.1:11434")
 MODEL = os.environ.get("FRIDAY_MODEL", "qwen3.5:4b")  # beat qwen3:8b 39/42 vs 33/42 with 1.7 GB less VRAM (PLAN §7)
 WHISPER = os.environ.get("FRIDAY_WHISPER", "large-v3-turbo")
@@ -253,8 +253,8 @@ def confirm(question, detail="", strong=False):
         print(f"  📱 {'อนุมัติ' if ok else 'ไม่อนุมัติ'}จากมือถือ: {question[:80]}")
         return ok
     if strong:
-        brief = detail if len(detail) <= 700 else detail[:700].rsplit("\n", 1)[0] + "\n…"  # §109 enough to decide, not a dump
-        panel.send(msg={"role": "tool", "text": f"🔐 {question}" + (f"\n{brief}" if detail else "")})  # Hello shows ~200 chars
+        # §110 the question in the panel; what it's about behind "ดูรายละเอียด" (Hello itself shows ~200 chars)
+        panel.send(msg={"role": "tool", "text": f"🔐 {question}", "detail": detail})
         try:
             ok = security.hello(f"FRIDAY: {question} {detail}".strip()[:200])
             if ok is not None:
@@ -1431,19 +1431,20 @@ def diff_brief(diff, lines=3):
     if not add and not rem:
         return diff[:120]
     peek = [f"+ {r[:60]}{'…' if len(r) > 60 else ''}" for r in add if r][:lines]
-    more = f"\n… อีก {len(add) - len(peek)} บรรทัด" if len(add) > len(peek) else ""
+    more = f"\n… อีก {len(add) - len(peek)} บรรทัด" if peek and len(add) > len(peek) else ""
     return f"+{len(add)} −{len(rem)} บรรทัด" + ("\n" + "\n".join(peek) if peek else "") + more
 
 
 def project_approve(what, detail):
     """§102 owner: "Hello ครั้งเดียวต่อคำสั่ง" — the first edit/command of a request asks Windows Hello (or the phone);
     the rest of that request goes ahead. Every change/command is shown in the panel (in brief, §109) and audited."""
-    brief = diff_brief(detail) if detail.startswith(("---", "@@")) or "\n+" in detail else detail[:200]
+    is_diff = detail.startswith(("---", "@@")) or "\n+" in detail
+    brief = diff_brief(detail, lines=0) if is_diff else detail[:80]
     if _project_ok.is_set():
-        panel.send(msg={"role": "tool", "text": f"📁 {shown(what)} · {shown(brief)}"})
+        panel.send(msg={"role": "tool", "text": f"📁 {shown(what)} · {shown(brief)}", "detail": shown(detail)})  # §110
         return True
-    ok = confirm(f"{shown(what)[:80]} — โปรเจกต์ {project.name()}: FRIDAY แก้ไฟล์/รันคำสั่งในโปรเจกต์นี้ได้จนจบคำสั่งนี้",
-                 shown(brief)[:300], strong=True)
+    ok = confirm(f"{shown(what)[:80]} ({shown(brief)}) — โปรเจกต์ {project.name()}: FRIDAY แก้ไฟล์/รันคำสั่งในโปรเจกต์นี้ได้จนจบคำสั่งนี้",
+                 shown(detail)[:20000], strong=True)
     if ok:
         _project_ok.set()
     return ok
@@ -1569,7 +1570,8 @@ def video_render(args):
         panel.send(msg={"role": "tool", "text": "🧐 ตรวจเนื้อเรื่องก่อนทำวิดีโอ…"})
         issues = video.story_lint(source) + story_review(source)
         if issues:  # FRIDAY rewrites it once, as a new file (the original stays), and checks again
-            panel.send(msg={"role": "tool", "text": "🧐 บทยังต้องแก้ — กำลังเขียนใหม่:\n" + "\n".join(f"• {shown(x)}" for x in issues)})
+            panel.send(msg={"role": "tool", "text": f"🧐 บทยังต้องแก้ {len(issues)} จุด — กำลังเขียนใหม่",
+                            "detail": "\n".join(f"• {shown(x)}" for x in issues)})
             if new := story_rewrite(project._text(full), issues):
                 src, rewritten = next_script(src), new
                 source = video.script(new)
@@ -2217,8 +2219,8 @@ def chat(history, extra=""):
             if project_local and name in PROJECT_READ | PROJECT_ACT and brain.is_cloud():
                 result = "The owner keeps this project's files on the PC: they are not sent to the cloud model."  # §102
             print(f"  [{name}] {result[:200]}")
-            if label := tool_label(name, args):  # §109 a short line in words, not the tool's name
-                panel.send(msg={"role": "tool", "text": label})
+            if label := tool_label(name, args):  # §109 a short line in words, not the tool's name · §110 its result behind a link
+                panel.send(msg={"role": "tool", "text": label, "detail": shown(result)[:4000] if name not in DOC_TOOLS else ""})
             tool_msg = {"role": "tool", "tool_name": name, "tool_call_id": call.get("id"), "content": result}
             messages.append(tool_msg)
             history.append({**tool_msg, "content": result[:600]})  # full text only for this turn: 8k context
@@ -3236,6 +3238,7 @@ def selftest():
     assert diff_brief(big).startswith("+9 −1 บรรทัด\n+ \"line0\": 0,") and diff_brief(big).endswith("… อีก 6 บรรทัด") and len(diff_brief(big)) < 160
     assert tool_label("project_read", {"path": "storyboard.json"}) == "📄 อ่าน storyboard.json" and tool_label("project_edit", {}) is None
     assert tool_label("weather", {}) == "🌤 ดูอากาศ" and tool_label("remember", {}) is None
+    assert diff_brief(big, lines=0) == "+9 −1 บรรทัด"  # §110 the line in the panel; the diff is behind "ดูรายละเอียด"
     with tempfile.TemporaryDirectory() as d:
         os.makedirs(os.path.join(d, "app"))
         open(os.path.join(d, "app", "main.py"), "w", encoding="utf-8").write("x = 1\n")

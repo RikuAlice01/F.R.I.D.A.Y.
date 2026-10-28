@@ -101,7 +101,13 @@
     align-self: flex-start; border-bottom-left-radius: 4px;
     border-color: rgba(62, 230, 255, .28); box-shadow: 0 0 18px rgba(62, 230, 255, .08);
   }
-  .msg.tool { align-self: center; font-size: 12px; color: var(--dim); background: none; border: none; padding: 0; }
+  .msg.tool { align-self: center; font-size: 12px; color: var(--dim); background: none; border: none; padding: 0; max-width: 100%; }
+  /* §110 "ดูรายละเอียด": the full text stays folded until asked for */
+  .msg.tool .more { color: var(--cyan); cursor: pointer; text-decoration: underline; margin-left: 6px; white-space: nowrap; }
+  .msg.tool .detail { display: none; text-align: left; white-space: pre-wrap; word-break: break-word; max-height: 40vh; overflow: auto;
+    font: 11px/1.45 Consolas, "Leelawadee UI", monospace; background: rgba(255, 255, 255, .06); border-radius: 8px;
+    padding: 6px 8px; margin-top: 4px; color: var(--dim); }
+  .msg.tool.open .detail { display: block; }
   .msg p { margin: 0 0 4px; } .msg p:last-child { margin: 0; }
   .msg ul, .msg ol { margin: 4px 0 6px; padding-left: 20px; }
   .msg li { margin: 2px 0; padding-left: 2px; }
@@ -420,16 +426,23 @@
       inline(p, l.slice(last)); if (p.childNodes.length) el.appendChild(p);
     }
   }
-  function bubble(role, text) {
+  function bubble(role, text, detail) {
     const d = document.createElement("div");
     d.className = "msg " + role;
     if (role === "tool") d.textContent = text; else render(d, text);
+    if (role === "tool" && detail) {                    // §110 a link opens the details (text only, never HTML)
+      const more = document.createElement("span"), box = document.createElement("div");
+      more.className = "more"; more.textContent = "ดูรายละเอียด";
+      box.className = "detail"; box.textContent = String(detail).slice(0, 20000);
+      more.addEventListener("click", () => { d.classList.toggle("open"); more.textContent = d.classList.contains("open") ? "ซ่อน" : "ดูรายละเอียด"; });
+      d.appendChild(more); d.appendChild(box);
+    }
     return d;
   }
   const atBottom = () => chat.scrollHeight - chat.scrollTop - chat.clientHeight < 40;
-  function addMsg(role, text) {
+  function addMsg(role, text, detail) {
     const stick = atBottom();
-    chat.appendChild(bubble(role, text)); loaded++;
+    chat.appendChild(bubble(role, text, detail)); loaded++;
     if (!document.body.classList.contains("interactive")) {        // passive preview: keep only the latest page
       while (chat.querySelectorAll(".msg").length > PAGE) chat.querySelector(".msg").remove();
     }
@@ -558,7 +571,7 @@
         p.textContent = e.partial + " …";
         chat.scrollTop = chat.scrollHeight;
       }
-      if (e.msg) addMsg(e.msg.role, e.msg.text);
+      if (e.msg) addMsg(e.msg.role, e.msg.text, e.msg.detail);
       if (e.weather) addWeather(e.weather);
       if (e.backdrop) document.body.style.setProperty("--bd", `url("${e.backdrop}")`);
       if ("interactive" in e) {
