@@ -54,7 +54,7 @@ import memory, rules, docsearch, tts_th, wakeword  # onnxruntime users: also aft
 import sessions, skills, documents, hardware, security, workspace, weather, reminders, media, tasks, windows, journal, voiceid
 import remote, brain, computer, project, categories, video
 
-__version__ = "0.47.0"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
+__version__ = "0.48.0"  # bump with PLAN.md (rule 6: TasksSummary ranges follow this)
 OLLAMA = os.environ.get("FRIDAY_OLLAMA", "http://127.0.0.1:11434")
 MODEL = os.environ.get("FRIDAY_MODEL", "qwen3.5:4b")  # beat qwen3:8b 39/42 vs 33/42 with 1.7 GB less VRAM (PLAN §7)
 WHISPER = os.environ.get("FRIDAY_WHISPER", "large-v3-turbo")
@@ -221,9 +221,11 @@ PROJECT_TOOLS.append({"type": "function", "function": {  # §104 the brag way: C
     "name": "video_render", "description":
         "Make an mp4 video in the open project from storyboard.json (write it first with project_edit). Storyboard: "
         '{"title": "...", "format": "landscape|vertical|square", "tone": "default|polished|cinematic|chaotic|deadpan|app-store|dark", '
-        '"mood": "bright|calm|epic|none", "scenes": [{"type": "title|lines|cards|stat|quote|image|outro", "text": "main words", '
+        '"mood": "bright|calm|epic|none", "scenes": [{"type": "title|lines|cards|stat|quote|image|outro|bars|donut|line|steps|icons", "text": "main words", '
         '"sub": "smaller line", "items": ["for lines/cards/outro button"], "image": "picture.jpg in the project (image scenes)", '
-        '"say": "voice-over line", "seconds": 3}]}. stat text = a number like "1,200+". Or file = a page with window.T(t) '
+        '"say": "voice-over line", "seconds": 3}]}. stat text = a number like "1,200+" (or "92%" = a gauge). Infographics: bars / donut / line take "data": '
+        '[{"label": "...", "value": 45}] (+ "unit": "%"); steps = items in order ("2024: opened"); icons = items starting '
+        'with an emoji ("☕ roasted daily"). Use only numbers the owner gave or the project files show. Or file = a page with window.T(t) '
         "(then seconds is needed). The owner sees the scenes and approves; it renders in the background.",
     "parameters": {"type": "object", "properties": {"file": {"type": "string"}, "seconds": {"type": "number"}, "mood": {"type": "string"}}}}})
 PROJECT_READ = {"project_files", "project_read", "project_search", "project_git"}

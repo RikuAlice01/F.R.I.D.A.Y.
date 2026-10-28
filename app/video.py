@@ -14,7 +14,8 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 SIZES = {"landscape": (1920, 1080), "vertical": (1080, 1920), "square": (1080, 1080)}
 FPS, SR, MAX_S = 30, 48000, 120
-TYPES = ("title", "lines", "cards", "stat", "quote", "image", "outro")
+TYPES = ("title", "lines", "cards", "stat", "quote", "image", "outro", "bars", "donut", "line", "steps", "icons")
+CHARTS = ("bars", "donut", "line")  # §106 infographics drawn from data: [{label, value}]
 TONES = ("default", "polished", "cinematic", "chaotic", "deadpan", "app-store", "dark")
 MOODS = ("bright", "calm", "epic", "none")
 IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg")
@@ -72,6 +73,16 @@ def _storyboard(sb):
         image = str(s.get("image", "")).replace("\\", "/").strip()
         if kind == "image" and not image:  # small models pick "image" with no picture: show the words instead
             kind = "lines"
+        data, unit = chart_data(s, items) if kind in CHARTS + ("steps",) else ([], "")
+        unit = str(s.get("unit") or unit)[:12]
+        if kind == "donut":
+            data = [d for d in data if d["value"] > 0]
+        if kind in CHARTS and len(data) < 2 and re.fullmatch(r"\s*\d+(?:\.\d+)?\s*%\s*", text):
+            kind = "stat"  # "donut" with just "92%": a gauge
+        elif kind in CHARTS and len(data) < 2 or kind == "steps" and len(items or data) < 2 or kind == "icons" and not items:
+            kind = "cards" if items else "lines"  # not enough to draw: words instead of an empty chart
+        if kind in CHARTS + ("steps", "icons") and not text and not s.get("text"):
+            text = " "  # a chart may have no heading
         if not text and kind != "image":  # a missing main line: take the next words there are
             say = str(s.get("say", ""))[:160]
             text, sub = ((sub, "") if sub else (items.pop(0), sub) if items and kind != "cards" else (say, sub) if say
@@ -80,13 +91,16 @@ def _storyboard(sb):
             raise ValueError(f"scene {i + 1} ({kind}) needs text")
         if kind == "image" and (not image or not image.lower().endswith(IMAGE_EXT) or re.search(r'["\'()<>]|^[a-z]+:', image, re.I)):
             raise ValueError(f"scene {i + 1}: image must be a picture file in the project (png/jpg/webp/gif/svg)")
-        need = read_seconds(" ".join([text, sub] + items)) + (0.4 * len(items) if kind == "cards" else 0)
+        need = read_seconds(" ".join([text, sub] + items + [d["label"] for d in data])) + (
+            0.4 * len(items) if kind in ("cards", "icons") else 0.5 * len(items or data) if kind == "steps" else 2.0 if kind in CHARTS else 0)
         try:
             seconds = float(s.get("seconds") or 0)
         except (TypeError, ValueError):
             seconds = 0
-        out.append({"type": kind, "text": text, "sub": sub, "items": items, "image": image, "say": str(s.get("say", ""))[:300],
+        out.append({"type": kind, "text": text.strip(), "sub": sub, "items": items, "image": image, "say": str(s.get("say", ""))[:300],
+                    "data": data, "unit": unit,
                     "seconds": round(min(12.0, max(seconds, need, 1.5)), 2)})
+    out = infographics(out)
     fmt = str(sb.get("format", "landscape")).lower()
     colors = {k: v for k, v in (sb.get("colors") or {}).items() if k in ("bg", "ink", "accent") and re.fullmatch(r"#[0-9a-fA-F]{6}", str(v))}
     res = {"title": str(sb.get("title", "video"))[:80], "format": fmt if fmt in SIZES else "landscape",
@@ -98,6 +112,69 @@ def _storyboard(sb):
     if res["seconds"] > MAX_S:
         raise ValueError(f"the video would be {res['seconds']:.0f} s — keep it under {MAX_S} s (fewer or shorter scenes)")
     return res
+
+
+def _number(v):
+    try:
+        return float(str(v).replace(",", "").replace("%", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+STAT = re.compile(r"\s*([^\d\s]*)\s*(\d[\d,]*(?:\.\d+)?)\s*(.*?)\s*")
+
+
+def infographics(scenes):
+    """§106 small models tell numbers one "stat" scene at a time: a run of them becomes one chart (the owner's numbers,
+    labelled by each scene's sub line). Parts of a whole (% adding up to ~100) -> donut · 3+ with one unit -> bars."""
+    out, i = [], 0
+    while i < len(scenes):
+        j = i
+        while j < len(scenes) and scenes[j]["type"] == "stat" and scenes[j]["sub"] and STAT.fullmatch(scenes[j]["text"]):
+            j += 1
+        run = scenes[i:j]
+        if len(run) < 2:
+            out.append(scenes[i])
+            i += 1
+            continue
+        nums = [STAT.fullmatch(s["text"]) for s in run]
+        vals, units = [_number(m[2]) for m in nums], [m[3].lstrip("+ ").strip() for m in nums]  # "420+ แก้ว" ~ "310 แก้ว"
+        k = 0
+        while k < len(run):  # inside the run: the first window of % adding up to ~100 -> donut
+            win = next((e for e in range(k + 2, len(run) + 1) if all(u == "%" for u in units[k:e]) and 95 <= sum(vals[k:e]) <= 105), None)
+            same = k
+            while same < len(run) and units[same] == units[k]:
+                same += 1
+            if win or units[k] != "%" and same - k >= 3:
+                end, kind = (win, "donut") if win else (same, "bars")
+                part = run[k:end]
+                out.append({"type": kind, "text": "", "sub": "", "items": [], "image": "", "say": " ".join(s["say"] for s in part if s["say"]),
+                            "data": [{"label": s["sub"][:40], "value": v} for s, v in zip(part, vals[k:end])],
+                            "unit": "" if kind == "donut" else (" " + units[k] if units[k] and not units[k].startswith(("%", "+")) else units[k]),
+                            "seconds": round(min(12.0, max(4.0, sum(s["seconds"] for s in part) * 0.7)), 2)})
+                k = end
+            else:
+                out.append(run[k])
+                k += 1
+        i = j
+    return out
+
+
+def chart_data(s, items):
+    """§106 [{label, value}] from "data" ({label, value} or [label, value]) or from items like "ลาเต้: 45" / "2024 120%".
+    -> (data, unit found in the items)"""
+    out, units = [], set()
+    for d in s.get("data") or [] if isinstance(s.get("data"), list) else []:
+        label, value = (d.get("label"), d.get("value")) if isinstance(d, dict) else d if isinstance(d, (list, tuple)) and len(d) == 2 else (None, None)
+        if (v := _number(value)) is not None:
+            out.append({"label": str(label or "")[:40], "value": v})
+    if not out:
+        for it in items:
+            m = re.fullmatch(r"\s*(.+?)\s*[:：=]?\s*(-?[\d,]+(?:\.\d+)?)\s*(%|[^\d\s]{1,8})?\s*", it)
+            if m and (v := _number(m[2])) is not None:
+                out.append({"label": m[1].strip(" :-")[:40], "value": v})
+                units.add(m[3] or "")
+    return out[:8], (units.pop() if len(units) == 1 else "")
 
 
 def timeline(sb):
@@ -113,8 +190,10 @@ def summary(sb):
     w, h = SIZES[sb["format"]]
     rows = [f"{sb['title']} · {sb['seconds']:.0f} วิ · {w}×{h} · โทน {sb['tone']} · เพลง {sb['mood']}" + (" · พากย์" if sb["voice"] else "")]
     for i, s in enumerate(sb["scenes"], 1):
+        data = ", ".join(f"{d['label']} {d['value']:g}{s['unit']}" for d in s.get("data") or [])
         rows.append(f"{i}. [{s['type']}] {s['text'] or s['image']}" + (f" — {s['sub']}" if s["sub"] else "")
-                    + (f" ({', '.join(s['items'])})" if s["items"] else "") + (f" 🔊 {s['say']}" if s["say"] else ""))
+                    + (f" ({', '.join(s['items'])})" if s["items"] else "") + (f" [{data}]" if data else "")
+                    + (f" 🔊 {s['say']}" if s["say"] else ""))
     return "\n".join(rows)
 
 
@@ -524,6 +603,23 @@ if __name__ == "__main__":
     assert storyboard({"scenes": [{"type": "lines", "text": "x", "seconds": 99}]})["seconds"] == 12
     fixed = storyboard({"title": "ร้าน", "scenes": [{"type": "image", "text": "ไม่มีรูป"}, {"type": "outro", "sub": "เปิดทุกวัน"}, {"type": "outro"},
                                                     {"type": "image", "say": "แมวเดินกลับบ้าน"}]})["scenes"]
+    info = storyboard({"title": "ร้าน", "scenes": [
+        {"type": "bars", "text": "ยอดขาย", "items": ["ลาเต้: 45%", "มอคค่า 30%", "อเมริกาโน่ 25%"]},
+        {"type": "donut", "data": [{"label": "ไทย", "value": 60}, ["ต่างชาติ", "40"], {"label": "x", "value": "abc"}]},
+        {"type": "line", "data": [{"label": "ม.ค.", "value": 1}]},  # one point can't be a line
+        {"type": "steps", "items": ["2024: เปิดร้าน", "2025: สาขา 2"]}, {"type": "icons", "items": ["☕ คั่วเอง", "📶 Wi-Fi"]},
+        {"type": "donut", "items": ["ไม่มีตัวเลข"]}]})["scenes"]
+    assert info[0]["data"][1] == {"label": "มอคค่า", "value": 30} and info[0]["unit"] == "%" and info[0]["text"] == "ยอดขาย"
+    assert [d["label"] for d in info[1]["data"]] == ["ไทย", "ต่างชาติ"] and info[1]["text"] == ""
+    assert info[2]["type"] == "lines" and info[3]["type"] == "steps" and info[4]["type"] == "icons" and info[5]["type"] == "cards"
+    assert "[ลาเต้ 45%, มอคค่า 30%, อเมริกาโน่ 25%]" in summary({"title": "x", "seconds": 9, "format": "square", "tone": "dark",
+                                                                   "mood": "calm", "voice": False, "scenes": info})
+    auto = storyboard({"title": "ร้าน", "scenes": [{"type": "stat", "text": "420+ แก้ว", "sub": "ลาเต้"}, {"type": "stat", "text": "310 แก้ว", "sub": "มอคค่า"},
+                                                  {"type": "stat", "text": "250 แก้ว", "sub": "โกโก้"}, {"type": "donut", "text": "92%", "sub": "กลับมาซ้ำ"},
+                                                  {"type": "stat", "text": "55%", "sub": "คนในพื้นที่"}, {"type": "stat", "text": "45%", "sub": "นักท่องเที่ยว"},
+                                                  {"type": "stat", "text": "1,200+", "sub": "ผู้ติดตาม"}]})["scenes"]
+    assert [s["type"] for s in auto] == ["bars", "stat", "donut", "stat"], [s["type"] for s in auto]
+    assert auto[0]["data"][0] == {"label": "ลาเต้", "value": 420} and auto[0]["unit"] == " แก้ว" and auto[2]["data"][1]["value"] == 45
     assert fixed[0]["type"] == "lines" and fixed[1]["text"] == "เปิดทุกวัน" and fixed[2]["text"] == "ร้าน" and fixed[3]["text"] == "แมวเดินกลับบ้าน"  # a scene stays ≤ 12 s
     m = music(2.0, "bright")
     assert m.shape == (2 * SR, 2) and 0.5 < np.abs(m).max() <= 0.81 and not np.abs(music(1.0, "none")).any()

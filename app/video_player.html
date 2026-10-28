@@ -38,6 +38,49 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg);
 .pill { font-size: calc(var(--u) * 3.6); font-weight: 600; padding: calc(var(--u) * 1.2) calc(var(--u) * 3.4); border-radius: 999px;
   background: var(--ink); color: var(--bg); }
 .caps .big, .caps .line, .caps .card { text-transform: uppercase; }
+/* §106 infographics */
+.chart { width: 84%; display: flex; flex-direction: column; gap: calc(var(--u) * 1.8); }
+.brow { display: flex; align-items: center; gap: calc(var(--u) * 2); font-size: calc(var(--u) * 4.4); font-weight: 600; }
+.blabel { width: 28%; text-align: right; }
+.btrack { flex: 1; height: calc(var(--u) * 4.4); background: var(--card); border-radius: 999px; overflow: hidden; }
+.bar { height: 100%; width: 0; border-radius: 999px; background: linear-gradient(90deg, var(--a1), var(--a2), var(--a3)); }
+.bval { width: 18%; text-align: left; font-weight: 700; }
+.bval { white-space: nowrap; }
+.vert .chart { width: 86%; gap: calc(var(--u) * 3); }
+.vert .brow { display: grid; grid-template-columns: 1fr auto; row-gap: calc(var(--u) * 1); }
+.vert .blabel { grid-column: 1 / 3; width: auto; text-align: left; } .vert .bval { width: auto; }
+.donut { display: flex; align-items: center; justify-content: center; gap: calc(var(--u) * 6); }
+.vert .donut { flex-direction: column; gap: calc(var(--u) * 3); }
+.dwrap { position: relative; width: calc(var(--u) * 46); height: calc(var(--u) * 46); }
+.dwrap svg { width: 100%; height: 100%; }
+.dcenter { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-weight: 700;
+  font-size: calc(var(--u) * 9); }
+.legend { display: flex; flex-direction: column; gap: calc(var(--u) * 1.6); text-align: left; font-size: calc(var(--u) * 4.4); font-weight: 600; }
+.dot { display: inline-block; width: .7em; height: .7em; border-radius: 50%; margin-right: .5em; vertical-align: .05em; }
+.linebox { position: relative; width: 84%; margin-bottom: calc(var(--u) * 5); }
+.linebox svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.vlab, .xlab { position: absolute; transform: translate(-50%, -150%); font-weight: 700; font-size: calc(var(--u) * 4); white-space: nowrap; }
+.xlab { transform: translate(-50%, 40%); color: var(--mute); font-weight: 600; font-size: calc(var(--u) * 3.2); }
+.steps { position: relative; display: flex; width: 92%; }
+.step { flex: 1; display: flex; flex-direction: column; align-items: center; gap: calc(var(--u) * 1.4); z-index: 1; padding: 0 calc(var(--u) * .8); }
+.dotn { width: calc(var(--u) * 8); height: calc(var(--u) * 8); border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  color: #fff; font-weight: 700; font-size: calc(var(--u) * 3.8); background: linear-gradient(135deg, var(--a1), var(--a3)); flex: none; }
+.when { font-size: calc(var(--u) * 3.4); color: var(--mute); font-weight: 600; }
+.slabel { font-size: calc(var(--u) * 4.2); font-weight: 600; line-height: 1.3; }
+.rail { position: absolute; top: calc(var(--u) * 4 - 3px); height: 6px; background: var(--card); border-radius: 3px; }
+.railfill { width: 0; height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--a1), var(--a3)); }
+.vert .steps { flex-direction: column; width: 80%; gap: calc(var(--u) * 3); }
+.vert .step { flex-direction: row; text-align: left; gap: calc(var(--u) * 3); }
+.vert .rail { top: auto; left: calc(var(--u) * 4.8 - 3px); width: 6px; height: auto; }
+.vert .railfill { width: 100%; height: 0; background: linear-gradient(180deg, var(--a1), var(--a3)); }
+.icons { display: grid; gap: calc(var(--u) * 2.4); width: 90%; }
+.icon { background: var(--card); border-radius: calc(var(--u) * 3); padding: calc(var(--u) * 3) calc(var(--u) * 2);
+  display: flex; flex-direction: column; align-items: center; gap: calc(var(--u) * 1.4); box-shadow: 0 calc(var(--u) * .8) calc(var(--u) * 3) rgba(0,0,0,.1); }
+.emoji { font-family: "Segoe UI Emoji", sans-serif; font-size: calc(var(--u) * 10); line-height: 1.1; }
+.ilabel { font-size: calc(var(--u) * 4); font-weight: 600; }
+.ring { position: relative; width: calc(var(--u) * 52); height: calc(var(--u) * 52); display: flex; align-items: center; justify-content: center; }
+.ring svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.ring .num { font-size: calc(var(--u) * 15); }
 #flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
 #bars { position: absolute; inset: 0; pointer-events: none; }
 #bars::before, #bars::after { content: ""; position: absolute; left: 0; right: 0; height: var(--bar, 0); background: #000; }
@@ -65,6 +108,8 @@ root.setProperty("--card", tone.card);
 tone.a.forEach((c, i) => root.setProperty("--a" + (i + 1), c));
 root.setProperty("--u", Math.min(innerWidth, innerHeight) / 100 * (innerHeight > innerWidth ? 1.15 : 1) + "px");  // vertical: a phone held close
 if (tone.caps) document.body.classList.add("caps");
+const VERT = innerHeight > innerWidth;
+if (VERT) document.body.classList.add("vert");
 
 const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
 const ease = (x) => 1 - Math.pow(1 - clamp(x), 3);                       // out-cubic
@@ -79,6 +124,15 @@ const el = (tag, cls, text) => {
   }
   return e;
 };
+
+// §106 infographics: SVG built node by node (no markup from the model), drawn by T(t) through e._f(progress)
+const NS = "http://www.w3.org/2000/svg";
+const svg = (tag, attrs, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+const PALETTE = () => [tone.a[0], tone.a[1], tone.a[2], tone.ink, "#f5a623", "#34c759", "#ff6b6b", tone.mute];
+const decs = (vals) => Math.min(2, Math.max(0, ...vals.map((v) => (String(v).split(".")[1] || "").length)));
+const num = (v, d) => Number(v).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+const head = (n, parts, s) => { if (s.text) parts.push([n.appendChild(el("div", "line grad", s.text)), 0, "rise"]); };
+const foot = (n, parts, s, at) => { if (s.sub) parts.push([n.appendChild(el("div", "sub", s.sub)), at, "rise"]); };
 
 // background: soft blobs drifting as a function of t
 const bg = document.getElementById("bg"), blobs = [];
@@ -110,10 +164,113 @@ for (const s of SB.scenes) {
     (s.items || []).forEach((it, i) => parts.push([box.appendChild(el("div", "card", it)), .35 + i * step, "pop"]));
   } else if (s.type === "stat") {
     const m = String(s.text).match(/^(\D*?)(\d[\d,]*\.?\d*)(.*)$/);
-    const num = n.appendChild(el("div", "num grad", s.text));
-    parts.push([num, 0, "pop"]);
-    if (m) num._count = { pre: m[1], to: parseFloat(m[2].replace(/,/g, "")), dec: (m[2].split(".")[1] || "").length, post: m[3], comma: m[2].includes(",") };
+    const pct = m && /^\s*%/.test(m[3]) && parseFloat(m[2]) <= 100;  // "72%": a gauge ring around the number
+    const holder = pct ? n.appendChild(el("div", "ring")) : n;
+    const big = holder.appendChild(el("div", "num grad", s.text));
+    if (pct) {
+      const g = svg("svg", { viewBox: "0 0 100 100" }, holder), Cr = 2 * Math.PI * 44;
+      svg("circle", { cx: 50, cy: 50, r: 44, fill: "none", "stroke-width": 6 }, g).style.stroke = tone.card;
+      const arc = svg("circle", { cx: 50, cy: 50, r: 44, fill: "none", "stroke-width": 6, "stroke-linecap": "round", transform: "rotate(-90 50 50)", "stroke-dasharray": Cr }, g);
+      arc.style.stroke = tone.a[1];
+      holder._f = (p) => arc.setAttribute("stroke-dashoffset", Cr * (1 - parseFloat(m[2]) / 100 * ease(p)));
+      holder._dur = Math.max(.8, s.seconds * .45);
+      parts.push([holder, 0, "fn"]);
+    }
+    parts.push([pct ? holder : big, 0, "pop"]);
+    if (m) big._count = { pre: m[1], to: parseFloat(m[2].replace(/,/g, "")), dec: (m[2].split(".")[1] || "").length, post: m[3], comma: m[2].includes(",") };
     if (s.sub) parts.push([n.appendChild(el("div", "sub", s.sub)), .35, "rise"]);
+  } else if (s.type === "bars") {
+    head(n, parts, s);
+    const box = n.appendChild(el("div", "chart"));
+    const max = Math.max(...s.data.map((d) => d.value), 1e-9), d0 = decs(s.data.map((d) => d.value));
+    const step = Math.min(.25, s.seconds * .3 / s.data.length);
+    s.data.forEach((d, i) => {
+      const row = box.appendChild(el("div", "brow"));
+      row.appendChild(el("div", "blabel", d.label));
+      const bar = row.appendChild(el("div", "btrack")).appendChild(el("div", "bar"));
+      const val = row.appendChild(el("div", "bval"));
+      row._f = (p) => { const q = ease(p); bar.style.width = (d.value / max * 100 * q) + "%"; val.textContent = num(d.value * q, d0) + (s.unit || ""); row.style.opacity = clamp(p * 4); };
+      parts.push([row, .3 + i * step, "fn"]);
+    });
+    foot(n, parts, s, .5 + s.data.length * step + .6);
+  } else if (s.type === "donut") {
+    head(n, parts, s);
+    const wrap = n.appendChild(el("div", "donut")), ring = wrap.appendChild(el("div", "dwrap"));
+    const g = svg("svg", { viewBox: "0 0 100 100" }, ring), Cr = 2 * Math.PI * 38, cols = PALETTE();
+    svg("circle", { cx: 50, cy: 50, r: 38, fill: "none", "stroke-width": 16 }, g).style.stroke = tone.card;
+    const total = s.data.reduce((a, d) => a + d.value, 0) || 1;
+    const segs = s.data.map((d, i) => { const c = svg("circle", { cx: 50, cy: 50, r: 38, fill: "none", "stroke-width": 16, transform: "rotate(-90 50 50)" }, g); c.style.stroke = cols[i % cols.length]; return c; });
+    const center = ring.appendChild(el("div", "dcenter"));
+    const legend = wrap.appendChild(el("div", "legend"));
+    s.data.forEach((d, i) => {
+      const li = legend.appendChild(el("div", "")), dot = li.appendChild(el("span", "dot"));
+      dot.style.background = cols[i % cols.length];
+      li.appendChild(el("span", "", `${d.label} ${Math.round(d.value / total * 100)}%`));
+      parts.push([li, .5 + i * .15, "rise"]);
+    });
+    ring._f = (p) => {
+      const q = ease(p); let cum = 0;
+      segs.forEach((c, i) => { const f = s.data[i].value / total * q; c.setAttribute("stroke-dasharray", `${Math.max(0, f * Cr - .8)} ${Cr}`); c.setAttribute("stroke-dashoffset", -cum * Cr); cum += f; });
+      center.textContent = Math.round(s.data[0].value / total * 100 * q) + "%";
+      center.style.color = cols[0];
+    };
+    ring._dur = 1.4;
+    parts.push([ring, .2, "fn"]);
+    foot(n, parts, s, 1.2 + s.data.length * .15);
+  } else if (s.type === "line") {
+    head(n, parts, s);
+    const W = 1000, H = VERT ? 900 : 420, P = 40, k = s.data.length, box = n.appendChild(el("div", "linebox"));
+    box.style.aspectRatio = `${W} / ${H}`;  // a phone screen: a taller chart
+    const g = svg("svg", { viewBox: `0 0 ${W} ${H}` }, box), vals = s.data.map((d) => d.value), d0 = decs(vals);
+    const mx = Math.max(...vals), mn = Math.min(0, ...vals);
+    const pts = vals.map((v, i) => [P + i * (W - 2 * P) / Math.max(1, k - 1), H - P - (v - mn) / ((mx - mn) || 1) * (H - 2 * P)]);
+    for (let j = 0; j < 4; j++) svg("line", { x1: P, x2: W - P, y1: P + j * (H - 2 * P) / 3, y2: P + j * (H - 2 * P) / 3, "stroke-width": 2, opacity: .25 }, g).style.stroke = tone.mute;
+    const dstr = "M" + pts.map((q) => q.join(",")).join(" L");
+    const area = svg("path", { d: `${dstr} L${pts[k - 1][0]},${H - P} L${pts[0][0]},${H - P} Z` }, g); area.style.fill = tone.a[1];
+    const path = svg("path", { d: dstr, fill: "none", "stroke-width": 8, "stroke-linecap": "round", "stroke-linejoin": "round" }, g);
+    path.style.stroke = tone.a[0];
+    const len = path.getTotalLength(); path.setAttribute("stroke-dasharray", len);
+    const dots = pts.map((q) => { const c = svg("circle", { cx: q[0], cy: q[1], r: 0 }, g); c.style.fill = tone.a[2]; return c; });
+    const vl = s.data.map((d, i) => { const v = box.appendChild(el("div", "vlab")); v.style.left = pts[i][0] / W * 100 + "%"; v.style.top = pts[i][1] / H * 100 + "%"; return v; });
+    s.data.forEach((d, i) => { const x = box.appendChild(el("div", "xlab", d.label)); x.style.left = pts[i][0] / W * 100 + "%"; x.style.top = "100%"; });
+    box._f = (p) => {
+      const q = ease(p);
+      path.setAttribute("stroke-dashoffset", len * (1 - q)); area.style.opacity = .16 * q;
+      dots.forEach((c, i) => { const on = clamp((q - i / Math.max(1, k - 1) + .1) * 10); c.setAttribute("r", 10 * on); vl[i].style.opacity = on; vl[i].textContent = num(vals[i], d0) + (s.unit || ""); });
+    };
+    box._dur = Math.max(1.4, s.seconds * .5);
+    parts.push([box, .3, "fn"]);
+    foot(n, parts, s, .4 + box._dur);
+  } else if (s.type === "steps") {
+    head(n, parts, s);
+    const items = s.items.length ? s.items : s.data.map((d) => d.label);
+    const box = n.appendChild(el("div", "steps")), rail = box.appendChild(el("div", "rail")), fill = rail.appendChild(el("div", "railfill"));
+    const step = Math.min(.7, s.seconds * .5 / items.length), edge = 50 / items.length + "%";
+    if (VERT) { rail.style.top = rail.style.bottom = edge; } else { rail.style.left = rail.style.right = edge; }
+    items.forEach((it, i) => {
+      const m = it.match(/^(.{1,14}?)\s*[:：]\s*(.+)$/), st = box.appendChild(el("div", "step"));
+      st.appendChild(el("div", "dotn", String(i + 1)));
+      const txt = st.appendChild(el("div", ""));
+      if (m) txt.appendChild(el("div", "when", m[1]));
+      txt.appendChild(el("div", "slabel", m ? m[2] : it));
+      parts.push([st, .3 + i * step, "pop"]);
+    });
+    rail._f = (p) => { fill.style[VERT ? "height" : "width"] = ease(p) * 100 + "%"; };
+    rail._dur = Math.max(.6, (items.length - 1) * step);
+    parts.push([rail, .3, "fn"]);
+    foot(n, parts, s, .5 + items.length * step);
+  } else if (s.type === "icons") {
+    head(n, parts, s);
+    const box = n.appendChild(el("div", "icons"));
+    box.style.gridTemplateColumns = `repeat(${Math.min(s.items.length, VERT ? 2 : 4)}, 1fr)`;
+    const step = Math.min(.25, s.seconds * .4 / s.items.length);
+    s.items.forEach((it, i) => {
+      const m = it.match(/^(\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*)\s*(.*)$/u), c = box.appendChild(el("div", "icon"));
+      c.appendChild(el("div", "emoji", m ? m[1] : "✦"));
+      c.appendChild(el("div", "ilabel", m ? m[2] : it));
+      parts.push([c, .3 + i * step, "pop"]);
+    });
+    foot(n, parts, s, .5 + s.items.length * step + .4);
   } else if (s.type === "quote") {
     parts.push([n.appendChild(el("div", "mark grad", "“")), 0, "pop"]);
     const q = n.appendChild(el("div", "quote", s.text)); q._type = Array.from(s.text); parts.push([q, .2, "type"]);
@@ -159,6 +316,7 @@ window.T = function (t) {
       if (kind === "rise") { e.style.opacity = ease(p); e.style.transform = `translateY(${(1 - ease(p)) * 4}vmin)`; }
       else if (kind === "pop") { e.style.opacity = clamp(p * 3); e.style.transform = `scale(${.6 + .4 * back(p)})`; }
       else if (kind === "type") { const k = Math.round(e._type.length * clamp((L - delay) / Math.min(2.2, e._type.length * .035))); e.textContent = e._type.slice(0, k).join(""); }
+      else if (kind === "fn") e._f(clamp((L - delay) / (e._dur || Math.max(1, tone.inT * 2))));
       else if (kind === "kenburns") { e.style.transform = `scale(${1.04 + .1 * (L / s.seconds)})`; e.style.opacity = ease(L / .5); }
       if (e._count) e.textContent = fmt(e._count, ease((L - delay) / Math.max(.8, s.seconds * .45)));
     }

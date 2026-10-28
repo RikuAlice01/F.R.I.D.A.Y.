@@ -41,6 +41,8 @@ BUILTIN = {
               "- Write storyboard.json with project_edit (old = ''), then call video_render. The owner sees the scenes and says yes.\n"
               "- Specific, not generic: the project's own names, words and facts; never invent numbers, reviews or claims.\n"
               "- Few words per scene, readable (~0.3 s a word); 'say' = one short spoken line per scene.\n"
+              "- Show, don't only tell: infographics (bars, donut, line, steps, icons, a % gauge) for numbers, parts,\n"
+              "  trends, processes and features — numbers only from the owner or the project's files.\n"
               "- Pick a tone that fits: default, polished, cinematic, chaotic, deadpan, app-store, dark.\n"
               "- A strong brain may instead write video.html: every frame drawn by window.T(seconds), no network, then\n"
               "  video_render with file = video.html and seconds."),
