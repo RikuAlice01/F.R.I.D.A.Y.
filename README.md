@@ -335,6 +335,12 @@ FRIDAY แสดงข้อความ skill ให้ดูก่อน → �
 
 ## ทำงานอย่างไร
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/overview-dark.png">
+  <img src="assets/diagrams/overview.png" alt="ภาพรวม FRIDAY: คุณสั่งด้วยไมค์ แผงแชต หรือมือถือ → FRIDAY ในเครื่อง (ด่านความปลอดภัย · ความจำ Obsidian) → สมอง Ollama ในเครื่อง หรือ Claude/OpenAI ถ้าเลือก → ลำโพง Windows แผงและมือถือ" width="100%">
+</picture>
+
+
 ### ภาพรวม — จากเสียงคุณ ถึงคำตอบ
 
 ```mermaid
@@ -361,7 +367,27 @@ flowchart TD
 - ทุกอย่างในภาพรัน**ในเครื่องคุณ** — ยกเว้นสมองเมื่อคุณเลือกคลาวด์เอง (ความจำ กฎ และด่านความปลอดภัยยังอยู่ในเครื่อง) · Ollama ฟังแค่ `127.0.0.1` (คนอื่นในเน็ตเรียกไม่ได้)
 - โมเดลใหญ่โหลดเมื่อใช้ และคืนหน่วยความจำเองเมื่อว่าง — ตอนไม่ได้คุย FRIDAY ใช้ CPU ไม่ถึง 1%
 
+### เสียง — ทำงานบนชิปไหน
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/voice-dark.png">
+  <img src="assets/diagrams/voice.png" alt="เสียง: ไมค์ → Silero VAD ฟังคำปลุกบน CPU → Whisper turbo / Thonburian ถอดเสียงบนการ์ดจอ → Qwen 3.5 4B → VaniraTTS (ไทย) / Piper (อังกฤษ) บน CPU → ลำโพง · WeSpeaker จำเสียงเจ้าของ" width="100%">
+</picture>
+
+### สมองและความจำ
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/brain-dark.png">
+  <img src="assets/diagrams/brain.png" alt="สมอง: ทุกจุดเรียก AI ผ่าน brain.chat() → Ollama ในเครื่อง (ค่าเริ่มต้น) หรือ Claude / OpenAI ผ่าน HTTPS ด้วย API key ใน Windows DPAPI · ความจำ Obsidian vault ค้นด้วย fastembed" width="100%">
+</picture>
+
 ### ด่านความปลอดภัย — ทุกครั้งที่ AI จะทำอะไรกับเครื่อง
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/safety-dark.png">
+  <img src="assets/diagrams/safety.png" alt="ด่านความปลอดภัย: AI ขอใช้ tool → โหมดปลอดภัย → ตรวจไฟล์ FRIDAY (SHA-256) → เพิ่งอ่านเอกสาร? → rules.check → Windows Hello หรือนิ้ว/PIN มือถือ → ทำงาน → audit log" width="100%">
+</picture>
+
 
 ```mermaid
 flowchart TD
@@ -383,6 +409,12 @@ flowchart TD
 AI **ข้ามด่านเหล่านี้ไม่ได้** — ด่านอยู่ในโค้ด ไม่ได้อยู่ในคำสั่งที่ส่งให้ AI
 
 ### มือถือ ↔ คอมพิวเตอร์
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/phone-dark.png">
+  <img src="assets/diagrams/phone.png" alt="มือถือ: แอป F.R.I.D.A.Y. (Kotlin · Compose · Android Keystore · VaniraTTS ในมือถือ) ⇄ Tailscale ⇄ remote.py (TLS pin + ลายเซ็น) ⇄ FRIDAY · จับคู่ครั้งเดียวด้วย QR + Windows Hello" width="100%">
+</picture>
+
 
 ```mermaid
 sequenceDiagram
@@ -408,6 +440,29 @@ sequenceDiagram
 - ไม่มีเซิร์ฟเวอร์กลาง — มือถือต่อตรงถึงคอมคุณ · คอมต้องเปิดอยู่
 - แชตที่พิมพ์บนคอมขึ้นในแอปเป็นข้อความ (เสียงออกที่คอม) · ล้างแชตฝั่งไหน อีกฝั่งล้างตาม
 - ประวัติแชตในแอปเข้ารหัสด้วยกุญแจในชิปของมือถือ
+
+### สั่งเครื่องและแอป
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/control-dark.png">
+  <img src="assets/diagrams/control.png" alt="สั่งเครื่อง: FRIDAY → ด่าน → Win32 (หน้าต่าง เสียง จอ) · PowerShell (allowlist) · cua-driver (ใช้แอปแทน) → Spotify / YouTube ผ่าน SMTC · แอปไหนก็ได้ผ่าน UI Automation · ออกเน็ตเฉพาะ Open-Meteo และเบราว์เซอร์ค้นเว็บ" width="100%">
+</picture>
+
+### โปรเจกต์และวิดีโอ
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/projects-dark.png">
+  <img src="assets/diagrams/projects.png" alt="โปรเจกต์และวิดีโอ: สมอง → project.inside() → อ่าน/ค้นหา → แก้ไฟล์ (diff + Hello) → รันคำสั่ง · FRIDAY.md เป็นกฎหมวด · วิดีโอ: script.md → ตรวจเนื้อเรื่อง → video_player (CSS + JS) → Edge headless → ffmpeg + VaniraTTS และเพลง → mp4" width="100%">
+</picture>
+
+### build และติดตั้ง
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/build-dark.png">
+  <img src="assets/diagrams/build.png" alt="build: Python + uv → PyInstaller → FRIDAY.exe (+ self-test) → Inno Setup → GitHub Releases → เครื่องคุณ · โค้ดอยู่ใน GitHub repo" width="100%">
+</picture>
+
+> ภาพ diagram ทำด้วย [stack-diagram](https://github.com/caru-ini/stack-diagram) (MIT) · ไอคอนจาก svgl / devicon / gilbarbara/logos / Lucide · โลโก้เป็นเครื่องหมายการค้าของเจ้าของแต่ละราย · แก้ภาพ: `assets/diagrams/src/gen.py`
 
 ## โมเดลที่ใช้
 
