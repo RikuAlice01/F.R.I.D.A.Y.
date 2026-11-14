@@ -100,8 +100,10 @@ def forget(peer_id):
     return gone
 
 
-def set_allow(peer_id, tools=None, vault=None):
-    """Tray-only (PLAN §113): replace a peer's allow-list. tools=["weather", ...] or vault=True/False; None = unchanged."""
+def set_allow(peer_id, tools=None, vault=None, forward=None):
+    """Tray-only (PLAN §113/§117): replace a peer's allow-list. tools=["weather", ...] · vault / forward = True/False ·
+    None = unchanged. forward: this friend may ask this PC to pass things on to its other friends, introduce them,
+    and see their names."""
     with _edit:
         d = peers()
         if peer_id not in d:
@@ -110,8 +112,19 @@ def set_allow(peer_id, tools=None, vault=None):
             d[peer_id]["allow_tools"] = sorted(set(tools))
         if vault is not None:
             d[peer_id]["allow_vault"] = bool(vault)
+        if forward is not None:
+            d[peer_id]["allow_forward"] = bool(forward)
         _save(d)
     return True
+
+
+def _store(peer_id, name, pub, host, port):
+    with _edit:
+        d = peers()
+        d[peer_id] = {"name": name, "pub": pub, "host": host, "port": port if port and 0 < int(port) < 65536 else None,
+                      "allow_tools": [], "allow_vault": False, "allow_forward": False,
+                      "created": time.strftime("%Y-%m-%d %H:%M")}
+        _save(d)
 
 
 def clean_name(name, default="peer"):
@@ -223,24 +236,27 @@ def request_pair(host, port, code, my_name, on_hello, pub_pem=None, my_port=PORT
     if _cert_pub_pem(der) != resp["pub"]:  # the cert we just talked to must be the identity it claims
         return False, "กุญแจไม่ตรงกับการเชื่อมต่อจริง — ปฏิเสธ"
     name = clean_name(resp.get("name"), host)
-    with _edit:
-        d = peers()
-        d[pid] = {"name": name, "pub": resp["pub"], "host": host, "port": port,
-                  "allow_tools": [], "allow_vault": False, "created": time.strftime("%Y-%m-%d %H:%M")}
-        _save(d)
+    _store(pid, name, resp["pub"], host, port)
     security.audit("peer", "peer_pair", name, "done", pid)
     return True, pid
 
 
+PATHS = {"message": "/peer/message", "tool": "/peer/tool", "memory": "/peer/memory", "forward": "/peer/forward",
+         "friends": "/peer/friends", "introduce": "/peer/introduce", "introduced": "/peer/introduced"}
+KINDS = ("message", "tool", "memory")  # what can be passed on through a friend (owner §117: "ข้อความ + tool + Shared")
+MAX_HOPS = 3  # PC-to-PC links one request may travel (owner §117: "ไม่เกิน 3 ทอด") -> a route of at most 2 names
+
+
 def call(peer_id, kind, payload, timeout=WAIT_S):
-    """kind: "message" | "tool" | "memory". Returns (ok, body_dict). The friend's TLS certificate must carry the key
-    pinned at pairing — anyone else answering at that address (new DHCP lease, another LAN) gets nothing."""
+    """kind: message | tool | memory | forward | friends | introduce | introduced. Returns (ok, body_dict). The
+    friend's TLS certificate must carry the key pinned at pairing — anyone else answering at that address (new DHCP
+    lease, another LAN) gets nothing."""
     info = peers().get(peer_id)
     if not info:
         return False, {"error": "ไม่รู้จัก peer นี้"}
     if not info.get("port"):
         return False, {"error": "ไม่รู้พอร์ตของเพื่อน — ให้เพื่อนจับคู่ใหม่จากเครื่องของเขา"}
-    path = {"message": "/peer/message", "tool": "/peer/tool", "memory": "/peer/memory"}[kind]
+    path = PATHS[kind]
     body = json.dumps(payload).encode()
     try:
         c = _conn(info["host"], info["port"], timeout)
@@ -259,14 +275,93 @@ def call(peer_id, kind, payload, timeout=WAIT_S):
         return False, {"error": str(e)[:200]}
 
 
+def clean_route(route):
+    """1..MAX_HOPS-1 friend names (cleaned), or None."""
+    if not isinstance(route, list) or not 1 <= len(route) <= MAX_HOPS - 1:
+        return None
+    names = [clean_name(n, "") for n in route]
+    return names if all(names) else None
+
+
+def clean_via(via):
+    """Names a request says it came through: a list, cut to MAX_HOPS, then cleaned. A claim, never a right."""
+    return [clean_name(v, "?") for v in via[:MAX_HOPS]] if isinstance(via, list) else []
+
+
+def own_id():
+    """This PC's certificate fingerprint: rides along a passed-on request so it can never be delivered back here
+    (that would wait on this PC's own turn — review §117)."""
+    return remote.fingerprint()
+
+
+def forward(peer_id, route, kind, payload, via=(), origin=None):
+    """Ask friend `peer_id` to pass a message / tool request / Shared read on along `route` (its friend, then that
+    friend's friend). Each PC on the way asks its own owner; the last one decides with the rights it gave the PC
+    right before it. Waits long enough for every owner on the way."""
+    route = clean_route(route)
+    if route is None or kind not in KINDS:
+        return False, {"error": f"ส่งต่อได้ไม่เกิน {MAX_HOPS} ทอด"}
+    return call(peer_id, "forward", {"route": route, "kind": kind, "payload": payload, "via": list(via)[:MAX_HOPS],
+                                     "origin": origin or own_id()}, timeout=WAIT_S * (len(route) + 1))
+
+
+def _port(v):
+    try:
+        v = int(v)
+    except (TypeError, ValueError):
+        return None
+    return v if 0 < v < 65536 else None
+
+
+def unique_name(name, extra):
+    """Two friends with the same name would make find() reach neither: the second gets "(extra)" added."""
+    taken = {v["name"].lower() for v in peers().values()}
+    return name if name.lower() not in taken else clean_name(f"{name} ({extra})", name)
+
+
+def introduce(peer_id, to, my_port=PORT):
+    """Ask friend `peer_id` to introduce this PC to its friend `to`. On success both sides hold each other's key
+    under a new shared id and talk directly from then on. The caller has already asked its owner (Windows Hello)."""
+    by = peers().get(peer_id, {}).get("name", "?")
+    ok, body = call(peer_id, "introduce", {"to": clean_name(to, ""), "port": int(my_port)}, timeout=WAIT_S * 2)
+    if not ok:
+        return False, body.get("error", "แนะนำไม่สำเร็จ")
+    pid, pub = body.get("id"), body.get("pub")
+    if not (isinstance(pid, str) and re.fullmatch(r"[0-9a-f]{16}", pid) and isinstance(pub, str) and isinstance(body.get("host"), str)):
+        return False, "คำตอบผิดรูปแบบ — ปฏิเสธ"
+    try:
+        remote._pub(pub)
+    except (ValueError, TypeError):
+        return False, "กุญแจผิดรูปแบบ — ปฏิเสธ"
+    known = peers()
+    if pid in known:  # review §117: never let an introduction overwrite a pinned friend
+        return False, "id นี้ใช้กับเพื่อนคนอื่นอยู่แล้ว — ปฏิเสธ"
+    if any(v["pub"] == pub for v in known.values()):
+        return False, "เครื่องนี้รู้จักกันอยู่แล้ว"
+    # trusted because the friend who introduced us vouches for it; a wrong key fails the TLS check on the first call
+    name = unique_name(clean_name(body.get("name"), "peer"), by)
+    _store(pid, name, pub, body["host"][:255], _port(body.get("port")))
+    security.audit("peer", "peer_introduced", name, "done", f"by {by} · {pid}")
+    return True, pid
+
+
 # ---------- server: what a peer is allowed to ask *this* PC ----------
 class Server:
     """on_pair(name, host) -> bool: Hello on the receiving side ("peer X wants to pair"). on_message(peer_id, info,
-    text) -> str. on_tool(peer_id, info, tool, arg) -> result (Server already checked the allow-list; dangerous
-    tools still run through this PC's normal rules.check/confirm — that gate is not bypassed here)."""
+    text, via) -> str (via = names it came through, as told by the sender — shown, never used for rights).
+    on_tool(peer_id, info, tool, arg[, via=]) -> result (Server already checked the allow-list; dangerous tools still
+    run through this PC's normal rules.check/confirm — that gate is not bypassed here).
+    §117, only for friends with allow_forward: on_forward(peer_id, info, route, kind, payload, via, origin) ->
+    (ok, body) · on_introduce(peer_id, info, to, port) -> (ok, body). From any paired friend: on_introduced(peer_id,
+    info, name, host) -> bool (Windows Hello: "X introduces Y — pair directly?") · on_relayed(peer_id, info, what, via)
+    -> bool (a Shared read passed on from someone this PC never paired with: the owner is asked)."""
+    INTRO_PER_HOUR = 3  # introductions one friend may put in front of the owner (each is a Windows Hello prompt)
 
-    def __init__(self, on_pair, on_message, on_tool, on_alert, port=PORT, host="::", name=None):
+    def __init__(self, on_pair, on_message, on_tool, on_alert, port=PORT, host="::", name=None,
+                 on_forward=None, on_introduce=None, on_introduced=None, on_relayed=None):
         self.on_pair, self.on_message, self.on_tool, self.on_alert = on_pair, on_message, on_tool, on_alert
+        self.on_forward, self.on_introduce, self.on_introduced = on_forward, on_introduce, on_introduced
+        self.on_relayed, self.intro = on_relayed, {}
         self.name = (name or socket.gethostname())[:40]
         self.nonces, self.fails, self.banned, self.lock = {}, {}, {}, threading.Lock()
         self.total_fails = []
@@ -374,27 +469,73 @@ class Server:
                 return self._reply(h, 401, {"error": "unauthorized"})
             peer_id, info = peer
             req = json.loads(body or b"{}")
+            if not isinstance(req, dict):
+                raise ValueError("body must be an object")
+            via = clean_via(req.get("via"))
+            if req.get("origin") == own_id():  # review §117: a passed-on request coming back to where it started
+                return self._reply(h, 409, {"error": "คำขอนี้วนกลับมาที่เครื่องต้นทาง — ไม่ส่งต่อ"})
             if method == "POST" and path == "/peer/message":
                 text = str(req.get("text", ""))[:2000]
-                return self._reply(h, 200, {"reply": self.on_message(peer_id, info, text)})
+                return self._reply(h, 200, {"reply": self.on_message(peer_id, info, text, via)})
+            if method == "POST" and path in ("/peer/forward", "/peer/friends", "/peer/introduce"):
+                if not info.get("allow_forward"):  # §117 default off; the owner opens it per friend in the tray
+                    security.audit("peer", "peer_forward_denied", f"{info['name']}: {path}", "denied")
+                    return self._reply(h, 403, {"error": "เพื่อนคนนี้ยังไม่ได้รับสิทธิ์ส่งต่อผ่านเครื่องนี้"})
+                if path == "/peer/friends":
+                    return self._reply(h, 200, {"friends": sorted(v["name"] for k, v in peers().items() if k != peer_id and v.get("port"))})
+                if path == "/peer/forward":
+                    route, kind = clean_route(req.get("route")), req.get("kind")
+                    if route is None or kind not in KINDS or not isinstance(req.get("payload"), dict):
+                        return self._reply(h, 400, {"error": f"ส่งต่อได้ไม่เกิน {MAX_HOPS} ทอด · ข้อความ / tool / Shared เท่านั้น"})
+                    origin = str(req.get("origin", ""))[:64]
+                    ok, out = (self.on_forward(peer_id, info, route, kind, req["payload"], via, origin) if self.on_forward
+                               else (False, {"error": "off"}))
+                    return self._reply(h, 200 if ok else 403, out)
+                ok, out = (self.on_introduce(peer_id, info, clean_name(req.get("to"), ""), _port(req.get("port")))
+                           if self.on_introduce else (False, {"error": "off"}))
+                return self._reply(h, 200 if ok else 403, out)
+            if method == "POST" and path == "/peer/introduced":  # a friend vouches for one of its friends
+                name, pub, host = clean_name(req.get("name")), req.get("pub"), str(req.get("host", ""))[:255]
+                remote._pub(pub)  # must be a real public key
+                now = time.time()
+                with self.lock:  # review §117: each one is a Windows Hello prompt — a friend can't flood the owner
+                    t = self.intro.setdefault(peer_id, [])
+                    t[:] = [x for x in t if now - x < 3600]
+                    if len(t) >= self.INTRO_PER_HOUR:
+                        return self._reply(h, 429, {"error": "แนะนำบ่อยเกินไป ลองใหม่ภายหลัง"})
+                    t.append(now)
+                if any(v["pub"] == pub for v in peers().values()):
+                    return self._reply(h, 409, {"error": "รู้จักกันอยู่แล้ว"})
+                if not (self.on_introduced and self.on_introduced(peer_id, info, name, host)):
+                    security.audit("peer", "peer_introduced", f"{name} by {info['name']}", "declined")
+                    return self._reply(h, 403, {"error": "เจ้าของเครื่องปลายทางไม่ได้อนุมัติ"})
+                if time.time() - now > WAIT_S - 15:  # approved after the asking side gave up: don't half-pair
+                    return self._reply(h, 408, {"error": "อนุมัติช้าเกินไป — ขอใหม่อีกครั้ง"})
+                new_id = secrets.token_hex(8)
+                _store(new_id, unique_name(name, info["name"]), pub, host, _port(req.get("port")))
+                security.audit("peer", "peer_introduced", f"{name} by {info['name']}", "done", new_id)
+                return self._reply(h, 200, {"id": new_id, "name": self.name, "pub": own_public_pem(), "port": self.port})
             if method == "POST" and path == "/peer/tool":
                 tool = str(req.get("tool", ""))
                 if tool not in info.get("allow_tools", []):
                     security.audit("peer", "peer_tool_denied", f"{info['name']}: {tool}", "denied")
                     return self._reply(h, 403, {"error": "ไม่อยู่ใน allow-list"})
-                result = self.on_tool(peer_id, info, tool, req.get("arg"))
+                result = self.on_tool(peer_id, info, tool, req.get("arg"), **({"via": via} if via else {}))
                 return self._reply(h, 200, {"result": result})
             if method == "POST" and path == "/peer/memory":
                 if not info.get("allow_vault"):
                     return self._reply(h, 403, {"error": "ไม่ได้เปิดแชร์ความจำให้ peer นี้"})
+                rel = str(req.get("path", ""))
+                if via and not (self.on_relayed and self.on_relayed(peer_id, info, f"อ่านโน้ต {rel}", via)):
+                    return self._reply(h, 403, {"error": "เจ้าของเครื่องไม่อนุญาตให้ส่งโน้ตต่อไป"})
                 try:
-                    p = _vault_path(str(req.get("path", "")))
+                    p = _vault_path(rel)
                     with open(p, encoding="utf-8") as f:
                         return self._reply(h, 200, {"text": f.read()})
                 except (ValueError, OSError):
                     return self._reply(h, 404, {"error": "ไม่พบไฟล์ใน Shared/"})
             return self._reply(h, 404, {"error": "not found"})
-        except (ValueError, KeyError, json.JSONDecodeError):
+        except (ValueError, KeyError, TypeError, AttributeError, json.JSONDecodeError):
             self._bad(ip, "bad request")
             return self._reply(h, 400, {"error": "bad request"})
 
@@ -410,11 +551,7 @@ class Server:
             security.audit("peer", "peer_pair", name, "declined")
             return self._reply(h, 403, {"error": "ไม่ได้รับอนุมัติบนเครื่องนี้"})
         peer_id = secrets.token_hex(8)  # both sides keep the other under this same id (each with the other's key)
-        with _edit:
-            d = peers()
-            d[peer_id] = {"name": name, "pub": req["pub"], "host": _host(ip), "port": port if 0 < port < 65536 else None,
-                          "allow_tools": [], "allow_vault": False, "created": time.strftime("%Y-%m-%d %H:%M")}
-            _save(d)
+        _store(peer_id, name, req["pub"], _host(ip), port)
         security.audit("peer", "peer_pair", name, "done", peer_id)
         return self._reply(h, 200, {"id": peer_id, "name": self.name, "pub": own_public_pem()})
 
@@ -456,14 +593,28 @@ if __name__ == "__main__":  # selftest: real TLS on ::1, a fake second FRIDAY wi
     def on_pair(name, ip):
         return pair_ok[0]
 
-    def on_message(peer_id, info, text):
+    seen = []
+
+    def on_message(peer_id, info, text, via):
+        seen.append(("message", text, via))
         return f"echo {text}"
 
-    def on_tool(peer_id, info, tool, arg):
-        tool_calls.append((tool, arg))
+    def on_tool(peer_id, info, tool, arg, via=()):
+        tool_calls.append((tool, arg) + ((via,) if via else ()))
         return "done"
 
-    srv = Server(on_pair, on_message, on_tool, print, port=0, host="::1").start()
+    def on_forward(peer_id, info, route, kind, payload, via, origin):
+        seen.append(("forward", route, kind, payload, via))
+        return True, {"reply": f"passed on to {route[0]}"}
+
+    def on_introduce(peer_id, info, to, port):
+        seen.append(("introduce", to, port))
+        return True, {"id": "ab" * 8, "name": to, "pub": their_pub, "host": "10.0.0.9", "port": 4000}
+
+    introduced_ok, relayed_ok = [True], [False]
+    srv = Server(on_pair, on_message, on_tool, print, port=0, host="::1", on_forward=on_forward, on_introduce=on_introduce,
+                 on_introduced=lambda pid, info, name, host: introduced_ok[0],
+                 on_relayed=lambda pid, info, what, via: seen.append(("relayed", what, via)) or relayed_ok[0]).start()
 
     # --- another FRIDAY's throwaway identity, standing in for a real second PC ---
     their_key = ec.generate_private_key(ec.SECP256R1())
@@ -536,6 +687,70 @@ if __name__ == "__main__":  # selftest: real TLS on ::1, a fake second FRIDAY wi
     assert set_allow(them_sees_us, vault=True)
     assert manual("POST", "/peer/memory", {"path": "note.md"}, peer=them_sees_us) == (200, {"text": "สวัสดี"})
     assert manual("POST", "/peer/memory", {"path": "../../s.dat"}, peer=them_sees_us)[0] == 404  # path escape blocked
+    # §117 passing things on: off until the owner allows this friend; at most 3 links; only message / tool / Shared
+    fw = {"route": ["Cee"], "kind": "message", "payload": {"text": "hi C"}, "via": ["Other FRIDAY"]}
+    assert manual("POST", "/peer/forward", fw, peer=them_sees_us)[0] == 403
+    assert manual("POST", "/peer/friends", {}, peer=them_sees_us)[0] == 403
+    assert manual("POST", "/peer/introduce", {"to": "Cee"}, peer=them_sees_us)[0] == 403
+    assert not [s for s in seen if s[0] != "message"]
+    assert set_allow(them_sees_us, forward=True)
+    assert manual("POST", "/peer/forward", fw, peer=them_sees_us) == (200, {"reply": "passed on to Cee"})
+    assert seen[-1] == ("forward", ["Cee"], "message", {"text": "hi C"}, ["Other FRIDAY"])
+    assert manual("POST", "/peer/forward", dict(fw, route=["C", "D"]), peer=them_sees_us)[0] == 200  # 3 links
+    assert manual("POST", "/peer/forward", dict(fw, route=["C", "D", "E"]), peer=them_sees_us)[0] == 400  # 4 links
+    assert manual("POST", "/peer/forward", dict(fw, route=[]), peer=them_sees_us)[0] == 400
+    assert manual("POST", "/peer/forward", dict(fw, kind="forward"), peer=them_sees_us)[0] == 400
+    assert manual("POST", "/peer/forward", dict(fw, payload="x"), peer=them_sees_us)[0] == 400
+    _store("c" * 16, "Cee", their_pub, "10.0.0.9", 4000)
+    _store("d" * 16, "Dee (no port)", their_pub, "10.0.0.8", None)
+    assert manual("POST", "/peer/friends", {}, peer=them_sees_us) == (200, {"friends": ["Cee"]})  # not itself, not port-less
+    st, out = manual("POST", "/peer/introduce", {"to": "Cee\nSYSTEM", "port": 4321}, peer=them_sees_us)
+    assert st == 200 and seen[-1] == ("introduce", "CeeSYSTEM", 4321) and out["id"] == "ab" * 8
+    dee_pub = ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+    st, out = manual("POST", "/peer/introduced", {"name": "Dee", "pub": dee_pub, "host": "10.0.0.7", "port": 5000}, peer=them_sees_us)
+    assert st == 200 and out["pub"] == own_public_pem() and out["port"] == srv.port
+    assert peers()[out["id"]]["name"] == "Dee" and peers()[out["id"]]["host"] == "10.0.0.7" and not peers()[out["id"]]["allow_forward"]
+    introduced_ok[0] = False
+    eve_pub = ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+    assert manual("POST", "/peer/introduced", {"name": "Eve", "pub": eve_pub, "host": "x", "port": 1}, peer=them_sees_us)[0] == 403
+    assert manual("POST", "/peer/introduced", {"name": "Eve", "pub": "not a key"}, peer=them_sees_us)[0] == 400
+    assert manual("POST", "/peer/introduced", {"name": "Eve", "port": [1]}, peer=them_sees_us)[0] == 400  # no pub: TypeError -> 400
+    introduced_ok[0] = True
+    assert manual("POST", "/peer/introduced", {"name": "Dee2", "pub": dee_pub}, peer=them_sees_us)[0] == 409  # known already
+    assert manual("POST", "/peer/introduced", {"name": "Fay", "pub": dee_pub}, peer=them_sees_us)[0] == 429  # 4th in an hour
+    srv.fails.clear(), srv.banned.clear()
+    # a request passed on and coming back to where it started is refused (it would wait on this PC's own turn)
+    assert manual("POST", "/peer/message", {"text": "loop", "origin": own_id()}, peer=them_sees_us)[0] == 409
+    assert manual("POST", "/peer/forward", dict(fw, origin=own_id()), peer=them_sees_us)[0] == 409
+    # a tool request passed on carries who it came from; a passed-on Shared read asks the owner
+    assert manual("POST", "/peer/tool", {"tool": "weather", "arg": {}, "via": ["Ann"]}, peer=them_sees_us)[0] == 200
+    assert tool_calls[-1] == ("weather", {}, ["Ann"])
+    assert manual("POST", "/peer/memory", {"path": "note.md", "via": ["Ann"]}, peer=them_sees_us)[0] == 403
+    assert seen[-1] == ("relayed", "อ่านโน้ต note.md", ["Ann"])
+    relayed_ok[0] = True
+    assert manual("POST", "/peer/memory", {"path": "note.md", "via": ["Ann"]}, peer=them_sees_us) == (200, {"text": "สวัสดี"})
+    # introduce(): the answer may never overwrite a pinned friend or add a second copy of one
+    _real_call = call
+    call = lambda pid, kind, payload, timeout=0: (True, {"id": them_sees_us, "pub": dee_pub, "host": "h", "name": "X", "port": 1})
+    assert introduce(them_sees_us, "X") == (False, "id นี้ใช้กับเพื่อนคนอื่นอยู่แล้ว — ปฏิเสธ")
+    call = lambda pid, kind, payload, timeout=0: (True, {"id": "e" * 16, "pub": their_pub, "host": "h", "name": "X", "port": 1})
+    assert introduce(them_sees_us, "X") == (False, "เครื่องนี้รู้จักกันอยู่แล้ว")
+    call = lambda pid, kind, payload, timeout=0: (True, {"id": "e" * 16, "pub": "junk", "host": "h", "name": "X"})
+    assert introduce(them_sees_us, "X")[0] is False
+    fresh = ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+    call = lambda pid, kind, payload, timeout=0: (True, {"id": "e" * 16, "pub": fresh, "host": "h", "name": "Cee", "port": "x"})
+    assert introduce(them_sees_us, "Cee") == (True, "e" * 16)
+    assert peers()["e" * 16]["name"] == "Cee (Other FRIDAY)" and peers()["e" * 16]["port"] is None  # name taken by Cee
+    call = _real_call
+    forget("e" * 16)
+    assert clean_via(["a" + chr(10) + "b"] * 9) == ["ab"] * 3 and clean_via("x") == []
+    assert manual("POST", "/peer/message", {"text": "via", "via": ["A", "B\nX"]}, peer=them_sees_us)[0] == 200
+    assert seen[-1] == ("message", "via", ["A", "BX"])
+    assert clean_route(["a", "b"]) == ["a", "b"] and clean_route(["a", "b", "c"]) is None and clean_route("a") is None
+    assert forward("nope", ["Cee"], "message", {})[0] is False and forward(them_sees_us, ["a", "b", "c"], "message", {})[0] is False
+    for k in ("c" * 16, "d" * 16, out["id"]):
+        forget(k)
+    srv.fails.clear(), srv.banned.clear()
     # the real client: call() signs with this PC's key; a record pinning that key on the same server stands in for B
     d = peers()
     d["self"] = {"name": "me", "pub": own_public_pem(), "host": "::1", "port": srv.port, "allow_tools": [], "allow_vault": False}
