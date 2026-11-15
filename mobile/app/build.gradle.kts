@@ -12,8 +12,8 @@ android {
         applicationId = "local.friday.remote"
         minSdk = 30 // Android 11: Keystore keys that open with fingerprint OR PIN, per use
         targetSdk = 35 // edge-to-edge is enforced from 35: handled with enableEdgeToEdge + Scaffold insets (§71)
-        versionCode = 8
-        versionName = "2.3"
+        versionCode = 9
+        versionName = "2.4"
         ndk { abiFilters += "arm64-v8a" } // every current Android phone is arm64; 4 ABIs = +70 MB
     }
     buildTypes {

@@ -8,6 +8,7 @@
         android:allowBackup="false"
         android:dataExtractionRules="@xml/no_backup"
         android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="F.R.I.D.A.Y."
         android:supportsRtl="true"
         android:theme="@style/Theme.AppCompat.DayNight.NoActionBar"

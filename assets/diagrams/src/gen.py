@@ -4,7 +4,7 @@ python gen.py <skill-dir> <icons-dir> <out-dir>"""
 import base64, json, os, re, subprocess, sys, time
 
 SKILL, ICONS, OUT = sys.argv[1:4]
-sys.path.insert(0, r"E:\friday\app")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "app"))
 import video  # Edge headless over DevTools (FRIDAY's own renderer)
 
 DARK = {"ollama", "anthropic", "openai", "nvidia", "github", "qwen"}  # have <name>_dark for group labels
@@ -159,6 +159,54 @@ D["build"] = dict(w=1000, h=430, kicker="FRIDAY · build และติดต�
            node(410, 260, "list", "self-test", "ทุกโมดูลต้องผ่าน"), node(740, 260, "git", "GitHub repo", "โค้ด · README")],
     edges=[edge("e", "M146 150 H224"), edge("e", "M296 150 H374"), edge("e", "M446 150 H524"), edge("e", "M596 150 H704", "upload", (650, 142)),
            edge("e", "M776 150 H864"), edge("n", "M410 226 V254", None), edge("n dash", "M446 290 H704", "git push", (575, 282))])
+
+
+# 9 · friend FRIDAY (§113/§117) --------------------------------------------------------------------------------------
+D["peer"] = dict(w=1000, h=560, kicker="FRIDAY · เพื่อน FRIDAY", title="FRIDAY หลายเครื่อง ต่อกันเป็นเครือข่าย",
+    lede="แต่ละคู่จับคู่กันเอง · สิทธิ์แยกตามเพื่อน · ความจำอยู่ในเครื่องใครเครื่องมัน",
+    groups=[group("ga", 20, 60, 320, 210, "PC ของคุณ (A)", "user"), group("gb", 660, 60, 320, 210, "PC ของบี (B)", "users"),
+            group("gb", 270, 320, 320, 210, "PC ของซี (C)", "users")],
+    nodes=[node(110, 120, "obsidian", "Obsidian vault", "ความจำ · ไม่ออกจากบ้าน"), node(250, 120, "python", "FRIDAY", "เจ้าของ: คุณ"),
+           node(750, 120, "python", "FRIDAY", "เจ้าของ: บี"), node(890, 120, "obsidian", "Obsidian vault", "ความจำ · ไม่ออกจากบ้าน"),
+           node(360, 380, "obsidian", "Obsidian vault", "ความจำ · ไม่ออกจากบ้าน"), node(500, 380, "python", "FRIDAY", "เจ้าของ: ซี")],
+    edges=[edge("e", "M286 150 H714", "TLS 1.3 · บีให้คุณใช้: อากาศ", (500, 142), start=True),
+           edge("e", "M250 226 V300 H480 V374", "ซีให้คุณอ่าน Shared", (365, 292), start=True),
+           edge("e", "M750 226 V300 H520 V374", "ข้อความอย่างเดียว", (635, 292), start=True),
+           edge("n", "M146 150 H214", start=True), edge("n", "M854 150 H786", start=True), edge("n", "M396 410 H464", start=True)])
+
+D["peer-pairing"] = dict(w=1000, h=540, kicker="FRIDAY · จับคู่เพื่อน", title="จับคู่ครั้งเดียว ด้วยโค้ดกับ Windows Hello",
+    lede="โค้ดเดินทางด้วยตาและปากของคนสองคน · ทั้งสองเครื่องยืนยันตัวเจ้าของก่อนจำกุญแจของอีกฝั่ง",
+    groups=[group("gb", 20, 60, 950, 210, "เครื่องเพื่อน (B)", "users"), group("ga", 20, 290, 950, 210, "เครื่องคุณ (A)", "user")],
+    nodes=[node(160, 120, "code", "สร้างโค้ด", "123 456 789 · 5 นาที"), node(650, 120, "finger", "Windows Hello", "B ยืนยัน"),
+           node(880, 120, "key", "จำกุญแจของ A", "id เดียวกันทั้งสองฝั่ง"),
+           node(160, 350, "user", "คุณกรอก", "ที่อยู่ + โค้ด"), node(300, 350, "finger", "Windows Hello", "A ยืนยันก่อนส่ง"),
+           node(480, 350, "lock", "ขอจับคู่", "TLS 1.3"), node(880, 350, "key", "จำกุญแจของ B", "ต้องตรงกับใบรับรอง")],
+    edges=[edge("n dash", "M160 226 V344", "บอกโค้ดกัน", (170, 250, "start")),
+           edge("e", "M196 380 H264"), edge("e", "M336 380 H444"),
+           edge("e", "M516 380 H570 V150 H614", "โค้ด + กุญแจ A", (580, 250, "start")),
+           edge("e", "M686 150 H844"), edge("e", "M880 226 V344", "กุญแจ B", (890, 250, "start"))])
+
+D["peer-gates"] = dict(w=1000, h=480, kicker="FRIDAY · ด่านของเพื่อน", title="ทุกคำขอจากเพื่อน ผ่านทุกด่านในโค้ด",
+    lede="เริ่มต้นเพื่อนใช้อะไรไม่ได้เลย · เปิดทีละอย่างจาก tray · ยังถามเจ้าของทุกครั้งด้วยชื่อเพื่อน",
+    groups=[group("ga", 150, 60, 780, 390, "เครื่องคุณ", "shield")],
+    nodes=[node(70, 120, "users", "เพื่อน FRIDAY", "คำขอเข้ามา"), node(240, 120, "sig", "ลายเซ็น", "nonce · 60 วิ"),
+           node(390, 120, "list", "allow-list", "เริ่มต้น = ไม่ให้"), node(540, 120, "ask", "ถามเจ้าของ", "บอกชื่อเพื่อน"),
+           node(690, 120, "shield", "ด่านของ tool", "Hello · กฎ"), node(840, 120, "tool", "ทำงาน", "ผลกลับไปหาเพื่อน"),
+           node(240, 300, "brain", "สมองตอบ", "ไม่เห็นความจำ · ไฟล์"), node(390, 300, "ban", "ไม่มีวันได้", "PowerShell · ไฟล์"),
+           node(690, 300, "folder", "Shared/", "อ่านได้แค่โฟลเดอร์นี้")],
+    edges=[edge("e", "M106 150 H204"), edge("e", "M276 150 H354"), edge("e", "M426 150 H504"),
+           edge("e", "M576 150 H654"), edge("e", "M726 150 H804"),
+           edge("n", "M240 226 V294", "ข้อความ", (250, 262, "start")), edge("n dash", "M390 226 V294", "ไม่อยู่ในรายการ", (400, 262, "start")),
+           edge("n", "M430 226 V250 H690 V294", "อ่านโน้ต", (560, 242))])
+
+D["peer-relay"] = dict(w=1000, h=540, kicker="FRIDAY · ส่งต่อ", title="ส่งต่อผ่านเพื่อน และแนะนำให้รู้จัก",
+    lede="บีถามเจ้าของทุกครั้ง · ส่งต่อในนามของบี · ไม่เกิน 3 ทอด · แนะนำแล้วคุยกันตรงได้",
+    groups=[group("ga", 30, 90, 180, 230, "PC ของคุณ (A)", "user"), group("gb", 410, 90, 180, 370, "PC ของบี (B) · ตัวกลาง", "users"),
+            group("gb", 790, 90, 180, 230, "PC ของซี (C)", "users")],
+    nodes=[node(120, 150, "python", "FRIDAY", "ไม่ได้จับคู่กับซี"), node(500, 150, "python", "FRIDAY", "ส่งต่อในนามบี"),
+           node(500, 300, "ask", "ถามเจ้าของบี", "ทุกครั้ง · ชื่อ A → C"), node(880, 150, "python", "FRIDAY", "ใช้สิทธิ์ที่ให้บี")],
+    edges=[edge("e", "M156 180 H464", "ฝากถามซี", (310, 172)), edge("e", "M536 180 H844", "ในนามของบี", (690, 172)),
+           edge("n", "M500 256 V294", start=True), edge("n dash", "M120 256 V490 H880 V256", "บีแนะนำ → คุยกันตรง", (500, 482), start=True)])
 
 TEMPLATE = open(os.path.join(SKILL, "assets", "template.html"), encoding="utf-8").read()
 CREDIT = "icons: svgl / devicon / gilbarbara/logos / Lucide"
