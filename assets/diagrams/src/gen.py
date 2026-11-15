@@ -162,17 +162,28 @@ D["build"] = dict(w=1000, h=430, kicker="FRIDAY · build และติดต�
 
 
 # 9 · friend FRIDAY (§113/§117) --------------------------------------------------------------------------------------
-D["peer"] = dict(w=1000, h=560, kicker="FRIDAY · เพื่อน FRIDAY", title="FRIDAY หลายเครื่อง ต่อกันเป็นเครือข่าย",
-    lede="แต่ละคู่จับคู่กันเอง · สิทธิ์แยกตามเพื่อน · ความจำอยู่ในเครื่องใครเครื่องมัน",
-    groups=[group("ga", 20, 60, 320, 210, "PC ของคุณ (A)", "user"), group("gb", 660, 60, 320, 210, "PC ของบี (B)", "users"),
-            group("gb", 270, 320, 320, 210, "PC ของซี (C)", "users")],
-    nodes=[node(110, 120, "obsidian", "Obsidian vault", "ความจำ · ไม่ออกจากบ้าน"), node(250, 120, "python", "FRIDAY", "เจ้าของ: คุณ"),
-           node(750, 120, "python", "FRIDAY", "เจ้าของ: บี"), node(890, 120, "obsidian", "Obsidian vault", "ความจำ · ไม่ออกจากบ้าน"),
-           node(360, 380, "obsidian", "Obsidian vault", "ความจำ · ไม่ออกจากบ้าน"), node(500, 380, "python", "FRIDAY", "เจ้าของ: ซี")],
-    edges=[edge("e", "M286 150 H714", "TLS 1.3 · บีให้คุณใช้: อากาศ", (500, 142), start=True),
-           edge("e", "M250 226 V300 H480 V374", "ซีให้คุณอ่าน Shared", (365, 292), start=True),
-           edge("e", "M750 226 V300 H520 V374", "ข้อความอย่างเดียว", (635, 292), start=True),
-           edge("n", "M146 150 H214", start=True), edge("n", "M854 150 H786", start=True), edge("n", "M396 410 H464", start=True)])
+_K = 'เพื่อน FRIDAY · เครือข่าย'
+_T = 'ทุกคู่จับมือกันเอง ไม่มีศูนย์กลาง'
+_L = 'เส้นหนึ่งเส้น = จับคู่หนึ่งครั้ง พร้อมสิทธิ์ของเส้นนั้น · ความจำอยู่ในเครื่องใครเครื่องมัน'
+_G = ['PC ของคุณ (A)', 'PC ของบี (B)', 'PC ของซี (C)', 'PC ของดี (D)']
+_V = 'Obsidian vault'
+_VR = 'ความจำ · อยู่บ้าน'
+_O = ['เจ้าของ: คุณ', 'เจ้าของ: บี', 'เจ้าของ: ซี', 'เจ้าของ: ดี']
+_HUB = 'ไม่มีศูนย์กลาง'
+_HUBR = 'คุณ ↔ ดี: ฝากบี/ซีส่งต่อ'
+_E = ['บีให้คุณใช้: อากาศ', 'ซีกับดี: แชร์ Shared', 'คุณให้ซีใช้: เพลง', 'บีกับดี: ข้อความ']
+D["peer"] = dict(w=1000, h=600, kicker=_K, title=_T, lede=_L,
+        groups=[group("ga", 20, 60, 320, 210, _G[0], "user"), group("gb", 660, 60, 320, 210, _G[1], "users"),
+                group("gb", 20, 340, 320, 210, _G[2], "users"), group("gb", 660, 340, 320, 210, _G[3], "users")],
+        nodes=[node(110, 120, "obsidian", _V, _VR), node(250, 120, "python", "FRIDAY", _O[0]),
+               node(750, 120, "python", "FRIDAY", _O[1]), node(890, 120, "obsidian", _V, _VR),
+               node(110, 400, "obsidian", _V, _VR), node(250, 400, "python", "FRIDAY", _O[2]),
+               node(750, 400, "python", "FRIDAY", _O[3]), node(890, 400, "obsidian", _V, _VR),
+               node(500, 260, "cloudoff", _HUB, _HUBR)],
+        edges=[edge("e", "M286 150 H714", _E[0], (500, 142), start=True), edge("e", "M286 430 H714", _E[1], (500, 422), start=True),
+               edge("e", "M250 226 V394", _E[2], (260, 312, "start"), start=True), edge("e", "M776 226 V394", _E[3], (766, 312, "end"), start=True),
+               edge("n", "M146 150 H214", start=True), edge("n", "M854 150 H786", start=True),
+               edge("n", "M146 430 H214", start=True), edge("n", "M854 430 H786", start=True)])
 
 D["peer-pairing"] = dict(w=1000, h=540, kicker="FRIDAY · จับคู่เพื่อน", title="จับคู่ครั้งเดียว ด้วยโค้ดกับ Windows Hello",
     lede="โค้ดเดินทางด้วยตาและปากของคนสองคน · ทั้งสองเครื่องยืนยันตัวเจ้าของก่อนจำกุญแจของอีกฝั่ง",

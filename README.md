@@ -464,7 +464,7 @@ sequenceDiagram
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/peer-dark.png">
-  <img src="assets/diagrams/peer.png" alt="เครือข่ายเพื่อน FRIDAY: คอม A B C แต่ละเครื่องมี FRIDAY และความจำ Obsidian ของตัวเอง · แต่ละคู่จับคู่กันเองผ่าน TLS 1.3 · สิทธิ์แยกตามเพื่อน" width="100%">
+  <img src="assets/diagrams/peer.png" alt="เครือข่ายเพื่อน FRIDAY: คอม 4 เครื่อง (คุณ บี ซี ดี) ต่อกันเป็นวง แต่ละเครื่องมี FRIDAY และความจำ Obsidian ของตัวเอง · เส้นหนึ่งเส้น = จับคู่หนึ่งครั้งพร้อมสิทธิ์ของเส้นนั้น · ไม่มีศูนย์กลาง · คุณกับดีไม่ได้จับคู่ แต่ฝากบีหรือซีส่งต่อได้" width="100%">
 </picture>
 
 <picture>
